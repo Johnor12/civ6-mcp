@@ -1,244 +1,171 @@
-# civ6-mcp
+# civ6-mcp — hotseat stand-in
 
-An MCP server that lets LLM agents play full games of Civilization VI.
+An MCP server that lets Claude Code play one absent player's turn in a local
+Civilization VI hotseat game, inside the live session, without seeing
+anything that player could not see.
 
-Connect any MCP-compatible client — Claude Code, Codex, Gemini CLI, or your own — to a running Civ 6 game. The agent reads game state, moves units, manages cities, conducts diplomacy, and ends turns, all through the game's own rule-enforcing APIs. No cheats, no vision model required.
+When the turn-change screen shows the absent player's name, you tell Claude
+Code "take Poundmaker's turn — he said: finish the campus, no wars". The
+agent takes the seat, plays the turn with the normal game tools, ends the
+turn for real, hands the game to the next player's turn-change screen and
+saves there. The whole stand-in leaves no trace except the save and the
+player's diary.
 
-<!-- TODO: Add screenshot or GIF of agent playing -->
-
-## Capabilities
-
-76 tools covering the full gameplay loop:
-
-- **Units** — list, move, attack, fortify, found cities, build improvements, promote, upgrade
-- **Cities** — inspect, set production, purchase units/buildings with gold, manage focus
-- **Map** — explore terrain, resources, fog of war; get settle and district placement advice
-- **Research** — browse tech and civic trees, set research targets
-- **Diplomacy** — relationships, modifiers, delegations, embassies, alliances, peace deals
-- **Trade** — propose and respond to deals, manage trade routes and destinations
-- **Government** — swap policy cards, change governments, choose era dedications
-- **Governors** — appoint, assign to cities, promote
-- **Religion** — found pantheons and religions, select beliefs, track spread
-- **Great People** — recruit, patronize, reject
-- **World Congress** — vote on resolutions, manage diplomatic favor
-- **Victory** — track progress across all victory conditions
-- **Game lifecycle** — save, load, launch, restart, kill
-
-Every turn, `end_turn` takes before/after snapshots and reports what happened: units damaged, cities grew, production completed, threats spotted near your cities.
-
-## Hotseat stand-in (this fork)
-
-This fork adds a **stand-in mode** for local hotseat games: when one of the human players is away, the agent plays their turn for them, inside the live hotseat session. Civ 6 switches FireTuner off in hotseat, so the fork ships a tiny UI mod, **MCP Bridge**, through which the server drives the game instead (a command file the mod polls, replies through `Lua.log`; ~0.2 s per call, works everywhere the tuner does and in hotseat too):
-
-```bash
-uv run python scripts/install_bridge_mod.py   # once; then (re)start Civ 6 and the MCP server
-```
-
-When the turn-change screen shows the absent player's name, tell the agent "take Poundmaker's turn" (plus whatever that player asked for). It calls `begin_standin_turn`, plays with the normal tools, and `end_turn` ends the turn for real, hands the game to the next player's turn-change screen and saves there. From the main menu, `load_hotseat_save` opens a hotseat save by itself.
-
-Every game tool is locked in a hotseat session until a stand-in is armed, refuses to act for any other player afterwards, the diary persists per game and player, and `run_lua` is removed. Full workflow, guarantees and limitations: [docs/hotseat-standin.md](docs/hotseat-standin.md). The older single-player-copy detour (`scripts/hotseat_standin.py`) still works where the mod cannot be used.
-
-## Quick start
-
-### 1. Configure Civ 6
-
-Enable the FireTuner debug interface and configure recommended settings:
-
-| Setting | Value | Why |
-|---------|-------|-----|
-| **Tuner** | Enabled | Required — opens the TCP debug port the MCP server connects to. Disables achievements. |
-| **Auto End Turn** | Disabled | The agent controls when turns end. Auto-end interferes with the blocker resolution flow. |
-| **Windowed mode** | Recommended | Lets you watch the game while the agent plays. Required for OCR-based save loading. |
-
-**Windows:** All three settings are available in the in-game Options menu. The Tuner setting appears as "Tuner (disables achievements)" under gameplay options.
-
-**macOS:** The Tuner setting is not exposed in the menu. Edit `AppOptions.txt` directly and set `EnableTuner 1`:
-
-```
-~/Library/Application Support/Sid Meier's Civilization VI/Firaxis Games/Sid Meier's Civilization VI/AppOptions.txt
-```
-
-**Linux:** Same as macOS — edit `AppOptions.txt` directly and set `EnableTuner 1`:
-
-```
-~/.local/share/aspyr-media/Sid Meier's Civilization VI/AppOptions.txt
-```
-
-<details>
-<summary><strong>Windows: additional setup</strong></summary>
-
-**The Civ 6 SDK is not required** — the tuner server is built into the game; `EnableTuner 1` (the in-game "Tuner" option) is enough. Install the SDK only if you want its FireTuner GUI.
-
-**Important notes:**
-- The tuner is **disabled in multiplayer, including local hotseat**. Install the MCP Bridge mod (`uv run python scripts/install_bridge_mod.py`) and the server drives the game through it instead; see `docs/hotseat-standin.md`.
-- A second monitor is fine: OCR captures the game window itself (not the primary screen) and clicks are mapped over the whole virtual desktop. Keep the game on one monitor and don't move it mid-session.
-- Close `FireTuner.exe` (the SDK's GUI tool) before running civ6-mcp — the game only allows **one** tuner connection at a time
-- Do **not** run from WSL — the network bridging between WSL2 and Windows is unreliable and the tuner server locks up after failed connections
-- If the connection fails, **restart the game** — the tuner often hangs after a bad handshake and won't recover until the process is recycled
-</details>
-
-<details>
-<summary><strong>Linux: additional notes</strong></summary>
-
-- The **native Linux port** is required — the FireTuner debug interface is built into the native binary. Proton/Wine builds do not expose it.
-- The game runs as a single `Civ6` process launched via Steam Linux Runtime (scout-on-soldier).
-- GUI automation (OCR-based menu navigation) requires **X11**. On Wayland, the game typically runs under XWayland which should work, but a native X11 session is most reliable.
-</details>
-
-Restart Civ 6. The game will listen on TCP port 4318 for connections.
-
-### 2. Install
-
-```bash
-git clone https://github.com/lmwilki/civ6-mcp.git
-cd civ6-mcp
-uv sync
-```
-
-For GUI automation features (screenshot, OCR-based menu navigation):
-
-```bash
-# macOS
-uv pip install 'civ6-mcp[launcher-macos]'
-
-# Windows (uses built-in Windows OCR — no external binaries needed)
-uv pip install 'civ6-mcp[launcher-windows]'
-
-# Linux (Ubuntu/Debian)
-sudo apt install xdotool tesseract-ocr
-uv pip install 'civ6-mcp[launcher-linux]'
-```
-
-### 3. Test the connection
-
-With Civ 6 running and a game loaded:
-
-```bash
-uv run python scripts/test_connection.py
-```
-
-You should see a successful handshake and a list of Lua states (GameCore_Tuner, InGame, etc.).
-
-### 4. Configure your MCP client
-
-The server runs over stdio. Point your client at it:
-
-<details>
-<summary><strong>Claude Code</strong></summary>
-
-The repo includes `.mcp.json` — detected automatically:
-
-```bash
-cd civ6-mcp
-claude
-```
-</details>
-
-<details>
-<summary><strong>Claude Desktop</strong></summary>
-
-Add to your config file:
-- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
-- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
-
-```json
-{
-  "mcpServers": {
-    "civ6": {
-      "command": "uv",
-      "args": ["run", "--directory", "/path/to/civ6-mcp", "civ-mcp"]
-    }
-  }
-}
-```
-</details>
-
-<details>
-<summary><strong>Codex</strong></summary>
-
-Add to `.codex/config.toml` in the project root:
-
-```toml
-[mcp_servers.civ6]
-command = "uv"
-args = ["run", "--directory", "/path/to/civ6-mcp", "civ-mcp"]
-```
-</details>
-
-<details>
-<summary><strong>Gemini CLI</strong></summary>
-
-Add to `.gemini/settings.json` in the project root:
-
-```json
-{
-  "mcpServers": {
-    "civ6": {
-      "command": "uv",
-      "args": ["run", "--directory", "/path/to/civ6-mcp", "civ-mcp"]
-    }
-  }
-}
-```
-</details>
-
-<details>
-<summary><strong>Other MCP clients</strong></summary>
-
-The server speaks stdio JSON-RPC:
-
-```bash
-uv run civ-mcp
-```
-</details>
-
-### 5. Play
-
-Load a game in Civ 6, connect your client, and try:
-
-```
-Play my Civ 6 game. Start by getting an overview, then check units and
-cities, and play through the turn.
-```
-
-The agent will orient with `get_game_overview`, scan the map for threats, move units, set production and research, handle diplomacy, and end the turn.
-
-## As a benchmark
-
-Civilization VI is a compelling environment for evaluating LLM strategic reasoning. Games run 300+ turns with compounding decisions, incomplete information, and multiple competing objectives — a significant step up from single-turn or short-horizon tasks.
-
-- **Multi-turn planning** — decisions compound over hundreds of turns with delayed payoffs
-- **Incomplete information** — fog of war, hidden AI intentions, unexplored map
-- **Resource management** — balancing gold, production, science, culture, faith, and military
-- **Opponent modeling** — reading diplomatic signals, anticipating AI behavior
-- **Strategic adaptation** — responding to threats, shifting priorities mid-game
-
-The MCP interface provides a clean abstraction: the model receives narrated game state as text and responds with tool calls. All game rules are enforced by the engine. A companion web app lets you replay sessions turn by turn.
+This is a heavily trimmed fork of [lmwilki/civ6-mcp](https://github.com/lmwilki/civ6-mcp)
+(MIT). The single-player, benchmark, dashboard and FireTuner machinery of
+the original is gone; what remains is the hotseat stand-in and the game
+tools it needs. Windows only.
 
 ## How it works
 
+Civ 6 shuts its FireTuner debug port down inside any multiplayer session,
+including local hotseat, so the server drives the game through a tiny UI
+mod instead, **MCP Bridge** (`mods/MCPBridge`):
+
 ```
-Claude / Any MCP Client
-    |  stdio (JSON-RPC)
-    v
-MCP Server (Python)    <- 70+ tools
-    |
-    |  Generates Lua code at runtime
-    |  TCP :4318
-    v
-Civilization VI        <- Game is the TCP server
+civ6-mcp server                         Civ 6 (MCP Bridge mod)
+───────────────                         ──────────────────────
+writes Mods/MCPBridge/UI/mcp_bridge_cmd.lua
+   MCP_CMD = { seq = 17, context = "InGame", code = [[ ... ]] }
+                                        every 0.2 s: include("mcp_bridge_cmd")
+                                        new seq? -> loadstring(code)() with
+                                        print() captured
+tails Logs/Lua.log                      MCPBridge_InGame: MCPB|17|O|<line>
+                                        MCPBridge_InGame: MCPB|17|X
 ```
 
-The server maintains a persistent TCP connection to Civ 6 via the FireTuner debug protocol. It generates Lua code, executes it inside the game's two Lua VMs (GameCore for reading state, InGame for issuing commands), parses the output, and returns narrated text to the LLM.
+`include()` re-reads the file from disk on every call, `Lua.log` is written
+as the game prints, and that is the whole protocol: about 0.2 s per call.
+The mod is pure UI (`AffectsSavedGames=0`); it changes no rules and no
+saves. It runs in two contexts: `InGame` (any loaded game) and the front end
+(main menu and staging room, where it rides on the base game's `Test.lua`
+placeholder so the server can load a hotseat save from the menu).
 
-The repo includes an [AGENTS.md](AGENTS.md) playbook (symlinked as `CLAUDE.md` for Claude Code) with detailed instructions for agents: turn loop, combat, diplomacy, common pitfalls. See the [devlog](docs/devlog/) for the full development story, including reverse-engineering the FireTuner protocol and the many API quirks discovered along the way.
+## Setup (once)
 
-## Requirements
+Requirements: Windows, Civ 6 (Steam), [uv](https://docs.astral.sh/uv/), Claude Code.
 
-- **macOS, Windows, or Linux** with Civilization VI (Steam version, Gathering Storm DLC)
-- **Python 3.12+** with [uv](https://docs.astral.sh/uv/)
-- An **MCP client** (Claude Code, Codex, Gemini CLI, or any MCP-compatible client)
+```bash
+git clone <this repo> && cd civ6-mcp
+uv sync
+uv run python scripts/install_bridge_mod.py   # copies mods/MCPBridge into Documents\My Games\...\Mods
+```
+
+Start Civ 6. It discovers the mod on launch and enables it; confirm under
+Additional Content > Mods that **MCP Bridge** is enabled. In the game
+options turn **Auto End Turn** off. `PlayIntroVideo 0` in `AppOptions.txt`
+saves time on every restart.
+
+The repo's `.mcp.json` registers the server for Claude Code; start Claude
+Code in this directory and check `/mcp` shows `civ6` connected. After
+changing the server code, restart it from `/mcp`.
+
+## Playing an absent player's turn
+
+The humans play as usual. When the turn-change screen shows the absent
+player's name ("RAY — Save Game / Start Turn"), leave the game there and
+tell Claude Code, in this repo:
+
+> take Poundmaker's turn — he said: finish the campus in Mistawasis, no wars
+
+Tool by tool:
+
+1. `hotseat_status` — confirms a hotseat session on Poundmaker's turn with
+   the turn-change screen up. Every other game tool is **locked** until a
+   stand-in is armed.
+2. `begin_standin_turn("Poundmaker", note="finish the campus …")` — checks
+   the seat, presses Start Turn (dismisses the screen, unpauses), writes the
+   marker `~/.civ6-mcp/standin.json` and shows the note. A hotseat password
+   on that player is bypassed.
+3. `get_diary` — the diary for this game and player persists across
+   sessions, so the agent knows what it, or the human, did before.
+4. The normal turn: `get_game_overview`, `get_units`, `get_cities`, … every
+   tool acts for Poundmaker only; the guard refuses anything else.
+5. `end_turn` — runs the checks a real end turn runs (open diplomacy,
+   incoming deals, hard blockers, units that still need orders), then ends
+   the turn. The engine hands the seat to the next living human (or, after
+   the last one, runs the AI civs and city-states and starts the next turn);
+   the call returns once that player's turn-change screen is up and the
+   game has been saved there as `<LEADER> <turn> <year> MCP` in the hotseat
+   save folder. The marker stays active with `finished_turn` set, so every
+   game tool is locked again until the next `begin_standin_turn`.
+
+The next human sits down, sees their own turn-change screen, and plays.
+
+If the game is at the main menu instead (someone quit, or the PC was
+restarted), `list_saves` shows the hotseat saves and
+`load_hotseat_save("POUNDMAKER 63 150 AD")` goes through Multiplayer >
+Hotseat > Load Game > Start Game by itself and ends on the turn-change
+screen (about 30 s for a 10-civ save). It also works from inside another
+game (that game is left without saving). Load a save made **during the
+absent player's turn, before anything was done in it**: the game's
+autosave at turn change, or a save from the turn-change screen's own Save
+Game button. A save made by the previous player still has that player's
+turn active and `begin_standin_turn` refuses it.
+
+## Guarantees
+
+- **One seat.** The marker names one leader; before every game tool the
+  server checks that the game's local player is that leader and that their
+  turn is active (one Lua round trip, cached 20 s). Without an armed
+  stand-in every game tool is refused. After `end_turn` the local player is
+  someone else, so everything is refused until the next `begin_standin_turn`.
+- **Information isolation.** Everything the tools return is scoped to the
+  current player the way the game scopes it for a human: tiles through
+  `PlayersVisibility`, other civilizations through `HasMet`, enemy units
+  only on visible tiles. The diary query reads and stores only the local
+  player's own figures. There is no arbitrary-Lua tool.
+- **No process management.** The server never launches, kills or restarts
+  the game; a silent bridge just means the game is loading or at a screen
+  without the mod.
+- **Always saved, always on the turn-change screen.** `end_turn` returns
+  only after the save confirmed. If the save fails the message says so and
+  the game is still on the next player's screen for a manual Save Game.
+
+## Diplomacy with human players
+
+Other civilizations are humans. Proposals (`propose_trade`, delegations,
+friendship, alliances, peace) are queued and resolved by the other player on
+their own turn; `propose_trade(mode="test")` asks the game's AI evaluator
+and says nothing about what a human will accept. Incoming deals from humans
+show up through `get_pending_trades` and must be answered before `end_turn`
+lets the turn go.
+
+## Known limitations
+
+- Windows only: the front-end half of the bridge rides on a `Test.lua`
+  context that exists only in the Windows build, and the game folder
+  lookup uses the Windows shell. `CIV_MCP_MODS_DIR` and `CIV_MCP_LUA_LOG`
+  override the mod and log locations.
+- Popups that reference an engine event until their own close button runs
+  (natural wonder, wonder built, era complete, tutorial advisor) cannot be
+  closed from the bridge's UI context; `dismiss_popup` reports them and
+  someone presses ESC in the game.
+- A turn in which the stand-in is the last human of the round (the AI civs
+  and city-states run before the next turn-change screen; `end_turn` waits
+  up to four minutes) and a World Congress session have not been exercised
+  live.
+- A player's hotseat password is bypassed by `begin_standin_turn`.
+
+## Development
+
+```bash
+uv run pytest -q          # unit tests; no game needed
+```
+
+Layout: `bridge.py` (transport), `hotseat.py` (load save, accept turn, end
+turn, save), `standin.py` (marker and guard), `end_turn.py` (blocker
+resolution and the end-turn sequence), `game_state.py` (typed game API),
+`lua/` (Lua builders and parsers per domain), `narrate.py` (text for the
+agent), `diary.py`, `server.py` (the MCP tools). `CLAUDE.md` is the agent's
+playbook.
+
+Engine facts the bridge depends on: `include()` re-reads files from disk on
+every call; `Lua.log` cuts lines at about 2 KB (the mod splits long lines);
+mod UI contexts start hidden and get no update ticks until shown; the front
+end ignores a mod's `AddUserInterfaces`, hence the `Test.lua` shadow; the
+game discovers new mods only at launch.
 
 ## License
 
-MIT
+MIT, see `LICENSE`.

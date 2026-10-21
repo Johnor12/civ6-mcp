@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from civ_mcp import bridge
-from civ_mcp.connection import LuaError
+from civ_mcp.bridge import LuaError
 
 
 def _run(coro):
@@ -142,7 +142,7 @@ class TestRoundTrip:
         mod.replies["turn"] = ["O|turn=63", "O|---END---"]
         _run(conn.connect())
         assert conn.is_connected
-        assert _run(conn.execute_write('print("turn")')) == ["turn=63"]
+        assert _run(conn.execute('print("turn")')) == ["turn=63"]
         assert conn.last_context == "MCPBridge_InGame"
         assert _run(conn.where()) == "ingame"
         # The command file is cleared after every call.
@@ -152,7 +152,7 @@ class TestRoundTrip:
         conn, mod = fake_game
         mod.replies["big"] = ["P|aaa", "P|bbb", "O|ccc", "O|second"]
         _run(conn.connect())
-        assert _run(conn.execute_read("big")) == ["aaabbbccc", "second"]
+        assert _run(conn.execute("big")) == ["aaabbbccc", "second"]
 
     def test_lua_errors_raise(self, fake_game):
         conn, mod = fake_game
@@ -160,25 +160,38 @@ class TestRoundTrip:
         mod.replies["errline"] = ["O|ERR:UNIT_NOT_FOUND"]
         _run(conn.connect())
         with pytest.raises(LuaError, match="boom"):
-            _run(conn.execute_write("boom"))
+            _run(conn.execute("boom"))
         with pytest.raises(LuaError, match="UNIT_NOT_FOUND"):
-            _run(conn.execute_write("errline"))
+            _run(conn.execute("errline"))
 
     def test_silence_is_a_connection_error(self, fake_game):
         conn, mod = fake_game
         _run(conn.connect())
         mod.stop()
         with pytest.raises(ConnectionError):
-            _run(conn.execute_write("nobody home", timeout=0.3))
+            _run(conn.execute("nobody home", timeout=0.3))
         assert not conn.is_connected
 
-    def test_execute_in_state_maps_indexes(self, fake_game):
-        conn, mod = fake_game
-        mod.replies["hi"] = ["O|hi"]
-        _run(conn.connect())
-        assert _run(conn.execute_in_state(0, "hi")) == ["hi"]
-        with pytest.raises(LuaError):
-            _run(conn.execute_in_state(99, "hi"))
+    def test_overwritten_command_is_resent(self, tmp_path):
+        mods = tmp_path / "Mods"
+        bridge.install_mod(mods)
+        log = tmp_path / "Lua.log"
+        log.write_bytes(b"")
+        conn = bridge.BridgeConnection(mods_dir=mods, lua_log=log)
+        conn.poll_interval = 0.005
+        conn.resend_after = 0.1
+        conn._connected = True
+        conn._tail.seek_end()
+        mod = _FakeMod(conn.cmd_path, log)
+        mod.replies["hello"] = ["O|hi"]
+        # A stale writer clears the file before the mod ever reads it; the
+        # mod only starts afterwards and must still see the command.
+        threading.Timer(0.03, lambda: conn.cmd_path.write_text("MCP_CMD = nil\n")).start()
+        threading.Timer(0.06, mod.start).start()
+        try:
+            assert _run(conn.execute('print("hello")', timeout=3.0)) == ["hi"]
+        finally:
+            mod.stop()
 
     def test_missing_mod_is_a_connection_error(self, tmp_path):
         conn = bridge.BridgeConnection(

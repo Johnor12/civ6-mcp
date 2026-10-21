@@ -6,7 +6,7 @@ typed dataclasses. These tests verify the parsing logic with realistic fixtures.
 
 import pytest
 
-from civ_mcp.lua.overview import parse_gameover_response, parse_overview_response
+from civ_mcp.lua.overview import parse_overview_response
 from civ_mcp.lua.units import (
     parse_combat_estimate,
     parse_threat_scan_response,
@@ -15,46 +15,6 @@ from civ_mcp.lua.units import (
 from civ_mcp.lua.cities import parse_cities_response
 from civ_mcp.lua.map import parse_map_response
 from civ_mcp.lua.notifications import parse_end_turn_blocking
-
-
-# ---------------------------------------------------------------------------
-# parse_gameover_response
-# ---------------------------------------------------------------------------
-
-
-class TestParseGameover:
-    def test_game_active(self):
-        assert parse_gameover_response(["GAME_ACTIVE"]) is None
-
-    def test_victory(self):
-        lines = ["GAME_OVER|VICTORY|Gandhi|SCIENCE|alive|Gandhi"]
-        result = parse_gameover_response(lines)
-        assert result is not None
-        assert result.is_game_over is True
-        assert result.is_defeat is False
-        assert result.winner_name == "Gandhi"
-        assert result.victory_type == "SCIENCE"
-        assert result.player_alive is True
-        assert result.winner_leader == "Gandhi"
-
-    def test_defeat(self):
-        lines = ["GAME_OVER|DEFEAT|Gilgamesh|DOMINATION|dead|Gilgamesh"]
-        result = parse_gameover_response(lines)
-        assert result is not None
-        assert result.is_defeat is True
-        assert result.victory_type == "DOMINATION"
-        assert result.player_alive is False
-
-    def test_empty_lines(self):
-        assert parse_gameover_response([]) is None
-
-    def test_minimal_fields(self):
-        """Only 2 fields — optional fields should get defaults."""
-        lines = ["GAME_OVER|VICTORY"]
-        result = parse_gameover_response(lines)
-        assert result is not None
-        assert result.winner_name == "Unknown"
-        assert result.victory_type == "Unknown"
 
 
 # ---------------------------------------------------------------------------

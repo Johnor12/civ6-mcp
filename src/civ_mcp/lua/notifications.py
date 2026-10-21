@@ -43,14 +43,6 @@ print("{SENTINEL}")
 """.replace("{SENTINEL}", SENTINEL)
 
 
-def build_end_turn() -> str:
-    return """
-UI.RequestAction(ActionTypes.ACTION_ENDTURN)
-print("OK:TURN_ENDED")
-print("{SENTINEL}")
-""".replace("{SENTINEL}", SENTINEL)
-
-
 def build_notifications_query() -> str:
     """Query NotificationManager for active notifications (InGame context)."""
     return """

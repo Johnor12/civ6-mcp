@@ -1,1 +1,1 @@
-from civ_mcp.version import VERSION as __version__
+"""civ6-mcp: an MCP server that plays an absent player's turn in a local hotseat game."""

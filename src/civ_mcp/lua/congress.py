@@ -162,47 +162,6 @@ def parse_world_congress_response(lines: list[str]) -> WorldCongressStatus:
     return status
 
 
-def build_congress_vote(
-    resolution_hash: int, option: int, target_index: int, num_votes: int
-) -> str:
-    """Vote on a World Congress resolution (InGame context).
-
-    option: 1=A, 2=B
-    target_index: 0-based index into PossibleTargets
-    num_votes: total votes to commit (A.votes + B.votes = this value, allocated to chosen option)
-    """
-    return f"""
-local me = Game.GetLocalPlayer()
-local kParams = {{}}
-kParams[PlayerOperations.PARAM_RESOLUTION_TYPE] = {resolution_hash}
-kParams[PlayerOperations.PARAM_WORLD_CONGRESS_VOTES] = {num_votes}
-kParams[PlayerOperations.PARAM_RESOLUTION_OPTION] = {option}
-kParams[PlayerOperations.PARAM_RESOLUTION_SELECTION] = {target_index}
-UI.RequestPlayerOperation(me, PlayerOperations.WORLD_CONGRESS_RESOLUTION_VOTE, kParams)
-print("OK:VOTED|res:{resolution_hash}|option:{option}|target:{target_index}|votes:{num_votes}")
-print("{SENTINEL}")
-"""
-
-
-def build_congress_submit() -> str:
-    """Submit all World Congress votes and resume turn processing (InGame context).
-
-    Mirrors WorldCongressPopup.lua OnAccept(): submit votes then ACTION_ENDTURN
-    to resume turn-segment processing after the WC stage.
-    """
-    return """
-local me = Game.GetLocalPlayer()
-local intro = ContextPtr:LookUpControl("/InGame/WorldCongressIntro")
-if intro then intro:SetHide(true) end
-local popup = ContextPtr:LookUpControl("/InGame/WorldCongressPopup")
-if popup then popup:SetHide(true) end
-UI.RequestPlayerOperation(me, PlayerOperations.WORLD_CONGRESS_SUBMIT_TURN, {})
-UI.RequestAction(ActionTypes.ACTION_ENDTURN)
-print("OK:CONGRESS_SUBMITTED")
-print("{SENTINEL}")
-""".replace("{SENTINEL}", SENTINEL)
-
-
 def build_register_wc_voter(votes: list[dict] | None = None) -> str:
     """Register a one-shot Events.WorldCongressStage1 handler (InGame context).
 

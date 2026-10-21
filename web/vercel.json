@@ -1,4 +1,0 @@
-{
-  "buildCommand": "[ -n \"$CONVEX_DEPLOY_KEY\" ] && bunx convex deploy --cmd 'bun run build' || bun run build",
-  "framework": "nextjs"
-}

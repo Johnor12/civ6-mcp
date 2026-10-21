@@ -14,30 +14,6 @@ from civ_mcp.lua._helpers import (
 from civ_mcp.lua.models import TradeDestination, TraderInfo, TradeRouteStatus
 
 
-def build_trade_capacity_check() -> str:
-    """Lightweight trade route capacity check (InGame context).
-
-    Returns a single TRCAP|capacity|active line.
-    Uses city route records (GetOutgoingRoutes) — the same authoritative source
-    as build_trade_routes_query. The per-unit HasTradeRoute() boolean is unreliable
-    and causes persistent false "idle route" warnings.
-    """
-    return """
-local me = Game.GetLocalPlayer()
-local tr = Players[me]:GetTrade()
-local cap = tr:GetOutgoingRouteCapacity()
-local active = 0
-for _, city in Players[me]:GetCities():Members() do
-    pcall(function()
-        local routes = city:GetTrade():GetOutgoingRoutes()
-        if routes then active = active + #routes end
-    end)
-end
-print("TRCAP|" .. cap .. "|" .. active)
-print("{SENTINEL}")
-""".replace("{SENTINEL}", SENTINEL)
-
-
 def build_trade_routes_query() -> str:
     """Get trade route capacity, active routes with enriched data (InGame).
 

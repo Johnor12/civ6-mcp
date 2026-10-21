@@ -1,8 +1,6 @@
 """Drive a local hotseat session through the MCP Bridge mod.
 
-FireTuner is dead inside hotseat sessions, so everything here goes through
-:class:`civ_mcp.bridge.BridgeConnection`. The flow mirrors what a person does
-at the keyboard:
+The flow mirrors what a person does at the keyboard:
 
     main menu ─► Multiplayer > Hotseat > Load Game ─► staging room ─► Start
     ─► PlayerChange screen ("<name>: Save Game / Start Turn") ─► play ─►
@@ -19,7 +17,12 @@ import logging
 import time
 from dataclasses import dataclass
 
-from civ_mcp.bridge import CONTEXT_FRONTEND, CONTEXT_INGAME, BridgeConnection
+from civ_mcp.bridge import (
+    CONTEXT_FRONTEND,
+    CONTEXT_INGAME,
+    BridgeConnection,
+    hotseat_saves_dir,
+)
 from civ_mcp.lua._helpers import SENTINEL
 
 log = logging.getLogger(__name__)
@@ -36,6 +39,24 @@ def normalize_leader(leader: str) -> str:
     if not s.startswith("LEADER_"):
         s = "LEADER_" + s
     return s
+
+
+def list_hotseat_saves(limit: int = 30) -> str:
+    """Saves in the game's hotseat folder (plus its auto/ and quick/ subfolders), newest first."""
+    base = hotseat_saves_dir()
+    found: list[tuple[float, str]] = []
+    for sub, tag in (("", ""), ("auto", " [autosave]"), ("quick", " [quicksave]")):
+        folder = base / sub if sub else base
+        if not folder.is_dir():
+            continue
+        for f in folder.glob("*.Civ6Save"):
+            found.append((f.stat().st_mtime, f.stem + tag))
+    if not found:
+        return f"No hotseat saves found in {base}."
+    found.sort(reverse=True)
+    lines = [f"Hotseat saves in {base} (newest first; load with load_hotseat_save):"]
+    lines.extend(f"  {name}" for _, name in found[:limit])
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -86,9 +107,7 @@ class HotseatStatus:
         if self.paused:
             parts.append("The game is paused.")
         if self.has_password:
-            parts.append(
-                "This player has a hotseat password (bypassed by the stand-in)."
-            )
+            parts.append("This player has a hotseat password (bypassed by the stand-in).")
         return " ".join(parts)
 
 
@@ -148,18 +167,12 @@ async def ingame_status(conn: BridgeConnection, timeout: float = 6.0) -> Hotseat
     return HotseatStatus(screen="none")
 
 
-async def frontend_status(
-    conn: BridgeConnection, timeout: float = 6.0
-) -> HotseatStatus:
-    lines = await conn.execute_in_context(
-        CONTEXT_FRONTEND, _FRONTEND_STATUS_LUA, timeout
-    )
+async def frontend_status(conn: BridgeConnection, timeout: float = 6.0) -> HotseatStatus:
+    lines = await conn.execute_in_context(CONTEXT_FRONTEND, _FRONTEND_STATUS_LUA, timeout)
     for line in lines:
         if line.startswith("FE|"):
             p = line.split("|")
-            return HotseatStatus(
-                screen="frontend", in_session=_b(p[1]), is_hotseat=_b(p[2])
-            )
+            return HotseatStatus(screen="frontend", in_session=_b(p[1]), is_hotseat=_b(p[2]))
     return HotseatStatus(screen="none")
 
 
@@ -262,23 +275,17 @@ async def load_hotseat_save(
     if where == "ingame":
         log.info("load_hotseat_save: leaving the current game for the main menu")
         await conn.execute_in_context(
-            CONTEXT_INGAME,
-            f'print("EXIT") print("{SENTINEL}") Events.ExitToMainMenu()',
-            6.0,
+            CONTEXT_INGAME, f'print("EXIT") print("{SENTINEL}") Events.ExitToMainMenu()', 6.0
         )
         if not await wait_for(conn, "frontend", 90.0):
-            raise RuntimeError(
-                "Timed out waiting for the main menu after leaving the game."
-            )
+            raise RuntimeError("Timed out waiting for the main menu after leaving the game.")
         await asyncio.sleep(2.0)
     fe = await frontend_status(conn)
     if fe.in_session:
-        # A staging room is already open (hotseat or otherwise): leave it so the
-        # load below does not join the wrong session.
+        # A staging room is already open: leave it so the load below does
+        # not join the wrong session.
         await conn.execute_in_context(
-            CONTEXT_FRONTEND,
-            f'Network.LeaveGame() print("LEFT") print("{SENTINEL}")',
-            6.0,
+            CONTEXT_FRONTEND, f'Network.LeaveGame() print("LEFT") print("{SENTINEL}")', 6.0
         )
         await asyncio.sleep(2.0)
 
@@ -296,9 +303,7 @@ async def load_hotseat_save(
         raise RuntimeError("The save list query did not complete.")
     if result.startswith("NOT_FOUND"):
         names = result.split("|", 1)[1] if "|" in result else ""
-        raise RuntimeError(
-            f"Hotseat save '{save_name}' not found. Saves the game lists: {names}"
-        )
+        raise RuntimeError(f"Hotseat save '{save_name}' not found. Saves the game lists: {names}")
 
     # Staging room: the session exists once the save is parsed and the
     # players are configured; then "Start Game".
@@ -384,10 +389,7 @@ _BLOCKER_LUA = (
 
 
 async def end_turn_and_wait(
-    conn: BridgeConnection,
-    prev_player: int,
-    prev_turn: int,
-    timeout: float = 240.0,
+    conn: BridgeConnection, prev_player: int, prev_turn: int, timeout: float = 240.0
 ) -> HotseatStatus:
     """Send ACTION_ENDTURN and wait for the next human's PlayerChange screen.
 
@@ -411,19 +413,13 @@ async def end_turn_and_wait(
         changed = st.local_player != prev_player or st.turn != prev_turn
         if changed and st.turn_controls_visible:
             return st
-        if (
-            not changed
-            and not checked_blocker
-            and time.monotonic() > deadline - timeout + 12
-        ):
+        if not changed and not checked_blocker and time.monotonic() > deadline - timeout + 12:
             checked_blocker = True
             try:
                 lines = await conn.execute_in_context(CONTEXT_INGAME, _BLOCKER_LUA, 6.0)
             except Exception:
                 lines = []
-            blocker = next(
-                (l.split("|", 1)[1] for l in lines if l.startswith("BLOCK|")), "?"
-            )
+            blocker = next((l.split("|", 1)[1] for l in lines if l.startswith("BLOCK|")), "?")
             if blocker not in ("NONE", "ENDTURN_BLOCKING_TYPE_NONE", "?"):
                 raise RuntimeError(
                     f"The game refused to end the turn: blocker {blocker}. "

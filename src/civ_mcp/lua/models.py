@@ -13,27 +13,6 @@ class ScoreEntry:
 
 
 @dataclass
-class RivalSnapshot:
-    """Per-turn stats for a rival civ, for diary power curves."""
-
-    id: int
-    name: str
-    score: int
-    cities: int
-    pop: int
-    sci: float
-    cul: float
-    gold: float
-    mil: int
-    techs: int
-    civics: int
-    faith: float
-    sci_vp: int
-    diplo_vp: int
-    stockpiles: dict[str, int] = field(default_factory=dict)
-
-
-@dataclass
 class PlayerRow:
     """One row per player per turn for diary JSONL (long format)."""
 
@@ -95,29 +74,6 @@ class PlayerRow:
 
 
 @dataclass
-class CityRow:
-    """One row per city per turn for diary JSONL."""
-
-    pid: int
-    city_id: int
-    city: str
-    pop: int
-    food: float
-    production: float
-    gold: float
-    science: float
-    culture: float
-    faith: float
-    housing: float
-    amenities: int
-    amenities_needed: int
-    districts: str  # comma-separated short names
-    producing: str
-    loyalty: float
-    loyalty_per_turn: float
-
-
-@dataclass
 class AgentExtras:
     """Agent-only data not recorded for AI players."""
 
@@ -138,7 +94,6 @@ class DiarySnapshot:
     """Complete per-turn diary snapshot — players, cities, agent extras."""
 
     players: list[PlayerRow] = field(default_factory=list)
-    cities: list[CityRow] = field(default_factory=list)
     agent: AgentExtras = field(default_factory=AgentExtras)
 
 
@@ -470,41 +425,6 @@ class DiplomacySession:
     is_at_war: bool = (
         False  # True if this player declared war (session is war declaration)
     )
-
-
-@dataclass
-class CitySnapshot:
-    """Minimal city state for diffing between turns."""
-
-    city_id: int
-    name: str
-    population: int
-    currently_building: str
-    food_surplus: float = 0.0
-    turns_to_grow: int = 0
-    loyalty: float = 100.0
-    loyalty_per_turn: float = 0.0
-
-
-@dataclass
-class TurnSnapshot:
-    """Full game state snapshot taken before/after end_turn."""
-
-    turn: int
-    units: dict[int, UnitInfo]  # keyed by unit_id
-    cities: dict[int, CitySnapshot]  # keyed by city_id
-    current_research: str
-    current_civic: str
-    stockpiles: list[ResourceStockpile] = field(default_factory=list)
-
-
-@dataclass
-class TurnEvent:
-    """An event detected by diffing two snapshots."""
-
-    priority: int  # 1=critical, 2=important, 3=info
-    category: str  # "unit", "city", "research", "civic"
-    message: str
 
 
 @dataclass
@@ -953,19 +873,6 @@ class PantheonStatus:
 
 
 @dataclass
-class UnitUpgradeInfo:
-    """Info about a unit's upgrade path."""
-
-    unit_id: int
-    current_type: str
-    upgrade_type: str  # e.g. "UNIT_ARCHER"
-    upgrade_name: str
-    gold_cost: int
-    can_upgrade: bool
-    reason: str = ""  # failure reason if can't upgrade
-
-
-@dataclass
 class DedicationChoice:
     """A dedication/commemoration available for selection."""
 
@@ -1028,40 +935,6 @@ class PurchasableTile:
     terrain: str
     resource: str | None
     resource_class: str | None  # "strategic", "luxury", "bonus"
-
-
-@dataclass
-class StaticMapTile:
-    """Per-tile static terrain data from full map dump."""
-
-    terrain: int  # TerrainType index
-    feature: int  # FeatureType index (-1 = none)
-    hills: bool
-    river: bool
-    coastal: bool
-    resource: int  # ResourceType index (-1 = none)
-
-
-@dataclass
-class StaticMapDump:
-    """Full static terrain dump of the game map."""
-
-    grid_w: int
-    grid_h: int
-    tiles: list[StaticMapTile]  # row-major: index = y * grid_w + x
-    initial_owners: list[int]  # one per tile, -1 = unowned
-    initial_routes: list[int]  # one per tile, -1 = none
-    initial_cities: list[tuple[int, int, int, int, str]]  # (x, y, pid, pop, name)
-    players: list[tuple[int, str, str | None]]  # (pid, civ_type, cs_type)
-
-
-@dataclass
-class OwnershipDelta:
-    """Per-turn ownership/road changes + city snapshot."""
-
-    owner_changes: list[tuple[int, int]]  # (tile_idx, new_owner)
-    road_changes: list[tuple[int, int]]  # (tile_idx, route_type)
-    cities: list[tuple[int, int, int, int, str]]  # (x, y, pid, pop, name)
 
 
 @dataclass
@@ -1204,16 +1077,6 @@ class WorldCongressStatus:
 
 
 # --- Scattered dataclasses (originally defined mid-file near their builders) ---
-
-
-@dataclass
-class GameOverStatus:
-    is_game_over: bool
-    is_defeat: bool  # True = we lost, False = we won
-    winner_name: str
-    winner_leader: str
-    victory_type: str  # e.g. "VICTORY_RELIGIOUS", "VICTORY_SCIENCE"
-    player_alive: bool
 
 
 @dataclass

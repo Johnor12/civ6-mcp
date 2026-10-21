@@ -14,11 +14,9 @@ next load of a game (in-game context) or return to the main menu (front end).
 from __future__ import annotations
 
 import argparse
-import sys
 from pathlib import Path
 
-sys.path.insert(0, "src")
-from civ_mcp import bridge  # noqa: E402
+from civ_mcp import bridge
 
 
 def main() -> None:
@@ -38,9 +36,7 @@ def main() -> None:
     print(f"installed to:  {out}")
     print(
         "Next: (re)start Civ 6. The game picks the mod up on launch and enables "
-        "it; verify under Additional Content > Mods. With CIV_MCP_TRANSPORT unset "
-        "(auto) the server talks to the game through the mod whenever it is "
-        "installed, including inside hotseat sessions."
+        "it; verify under Additional Content > Mods. Then restart the MCP server."
     )
 
 

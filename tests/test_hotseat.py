@@ -17,13 +17,10 @@ def _run(coro):
 class _FakeBridge:
     """Answers execute_in_context from a script of (substring -> lines)."""
 
-    transport_name = "bridge"
-
     def __init__(self, where="ingame"):
         self._where = where
         self.replies: list[tuple[str, list[str]]] = []
         self.sent: list[tuple[str | None, str]] = []
-        self.end_turn_lock = asyncio.Lock()
 
     async def where(self, timeout=2.0):
         return self._where
@@ -35,10 +32,7 @@ class _FakeBridge:
                 return lines() if callable(lines) else lines
         return []
 
-    async def execute_write(self, code, timeout=None):
-        return await self.execute_in_context(CONTEXT_INGAME, code, timeout)
-
-    async def execute_read(self, code, timeout=None):
+    async def execute(self, code, timeout=None):
         return await self.execute_in_context(CONTEXT_INGAME, code, timeout)
 
 

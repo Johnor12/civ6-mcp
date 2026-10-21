@@ -5,13 +5,10 @@ from __future__ import annotations
 from civ_mcp.lua._helpers import SENTINEL, _int
 from civ_mcp.lua.models import (
     AgentExtras,
-    CityRow,
     DiarySnapshot,
-    GameOverStatus,
     GameOverview,
     PlayerRow,
     ReligionInfo,
-    RivalSnapshot,
     ScoreEntry,
 )
 
@@ -175,312 +172,6 @@ print("{SENTINEL}")
 """.replace("{SENTINEL}", SENTINEL)
 
 
-def build_gameover_check_gamecore() -> str:
-    """GameCore: minimal game-over check that survives the defeat screen.
-
-    Uses only Game.GetWinningTeam() and Players[] — no ContextPtr or UI
-    lookups. Victory type is reported as Unknown (TestVictory may not work
-    in GameCore). Better to detect the game-over with unknown type than
-    miss it entirely.
-    """
-    return f"""
-local winTeam = -1
-pcall(function() winTeam = Game.GetWinningTeam() end)
-local me = Game.GetLocalPlayer()
-if winTeam < 0 then
-    -- No formal winner yet — check for player elimination or turn limit.
-    local meAlive = true
-    pcall(function() meAlive = Players[me]:IsAlive() end)
-    -- Check turn limit: Quick speed = 330, Standard = 500.
-    -- Game.GetMaxTurns() returns 0 if no limit is set.
-    local curTurn = Game.GetCurrentGameTurn()
-    local maxTurns = 0
-    pcall(function() maxTurns = Game.GetMaxTurns() end)
-    if not meAlive then
-        -- Player eliminated — all cities lost
-        print("GAME_OVER|DEFEAT|Unknown|Elimination|dead|Unknown|-1")
-        print("{SENTINEL}")
-        return
-    end
-    if maxTurns > 0 and curTurn >= maxTurns then
-        -- Turn limit reached — "Out of Time"
-        print("GAME_OVER|DEFEAT|Unknown|TurnLimit|alive|Unknown|-1")
-        print("{SENTINEL}")
-        return
-    end
-    print("GAME_ACTIVE")
-    print("{SENTINEL}")
-    return
-end
-local winnerId = -1
-local winnerName = "Unknown"
-local winnerLeader = "Unknown"
-for i = 0, 62 do
-    local p = Players[i]
-    if p and p:IsMajor() and p:IsAlive() and p:GetTeam() == winTeam then
-        winnerId = i
-        local cfg = PlayerConfigurations[i]
-        pcall(function()
-            winnerName = Locale.Lookup(cfg:GetCivilizationShortDescription())
-            winnerLeader = Locale.Lookup(cfg:GetLeaderName())
-        end)
-        break
-    end
-end
-local isDefeat = (winnerId ~= me)
-local meAlive = true
-pcall(function() meAlive = Players[me]:IsAlive() end)
-print("GAME_OVER|" .. (isDefeat and "DEFEAT" or "VICTORY") .. "|" .. winnerName .. "|Unknown|" .. (meAlive and "alive" or "dead") .. "|" .. winnerLeader .. "|" .. tostring(winnerId))
-print("{SENTINEL}")
-"""
-
-
-def build_gameover_check() -> str:
-    """InGame: check if the game is over (EndGameMenu visible).
-
-    Tries Game.TestVictory() first (direct engine query), then falls back to
-    heuristic checks: religious majority, diplo VP >= 20 (scans all winning-team
-    players), science VP >= needed, domination capitals, and culture tourism.
-    Each check is pcall-wrapped so failures don't block detection.
-    """
-    return """
--- Primary check: GetWinningTeam is reliable regardless of UI state.
--- EndGameMenu control lookup can fail when blockers coexist with victory screen.
-local winTeam = -1
-pcall(function() winTeam = Game.GetWinningTeam() end)
-local me = Game.GetLocalPlayer()
-if winTeam < 0 then
-    -- No formal winner — check EndGameMenu, elimination, and turn limit
-    local egm = ContextPtr:LookUpControl("/InGame/EndGameMenu")
-    if not egm or egm:IsHidden() then
-        local meAlive = true
-        pcall(function() meAlive = Players[me]:IsAlive() end)
-        local curTurn = Game.GetCurrentGameTurn()
-        local maxTurns = 0
-        pcall(function() maxTurns = Game.GetMaxTurns() end)
-        if not meAlive then
-            print("GAME_OVER|DEFEAT|Unknown|Elimination|dead|Unknown|-1")
-            print("{SENTINEL}")
-            return
-        end
-        if maxTurns > 0 and curTurn >= maxTurns then
-            print("GAME_OVER|DEFEAT|Unknown|TurnLimit|alive|Unknown|-1")
-            print("{SENTINEL}")
-            return
-        end
-        print("GAME_ACTIVE")
-        print("{SENTINEL}")
-        return
-    end
-end
-local meAlive = Players[me]:IsAlive()
-local winTeam = -1
-pcall(function() winTeam = Game.GetWinningTeam() end)
-local winnerId = -1
-local winnerName = "Unknown"
-local winnerLeader = "Unknown"
-local victoryType = "Unknown"
-if winTeam >= 0 then
-    for i = 0, 62 do
-        local p = Players[i]
-        if p and p:IsMajor() and p:IsAlive() and p:GetTeam() == winTeam then
-            winnerId = i
-            local cfg = PlayerConfigurations[i]
-            winnerName = Locale.Lookup(cfg:GetCivilizationShortDescription())
-            winnerLeader = Locale.Lookup(cfg:GetLeaderName())
-            break
-        end
-    end
-end
-if winnerId >= 0 then
-    local wp = Players[winnerId]
-    -- Try each GameInfo.Victories row with Game.TestVictory first (direct engine query)
-    pcall(function()
-        for row in GameInfo.Victories() do
-            if Game.TestVictory(row.Index) then
-                victoryType = row.VictoryType
-                break
-            end
-        end
-    end)
-    -- Fallback heuristics if TestVictory didn't work (can be stale on EndGameMenu)
-    if victoryType == "Unknown" then
-        -- Religious: winner's religion is majority in all (or nearly all) major civs
-        pcall(function()
-            local relCreated = wp:GetReligion():GetReligionTypeCreated()
-            if relCreated >= 0 then
-                local totalM, convM = 0, 0
-                for i = 0, 62 do
-                    local q = Players[i]
-                    if q and q:IsMajor() and q:IsAlive() then
-                        totalM = totalM + 1
-                        if q:GetReligion():GetReligionInMajorityOfCities() == relCreated then convM = convM + 1 end
-                    end
-                end
-                if convM >= totalM - 1 then victoryType = "VICTORY_RELIGIOUS" end
-            end
-        end)
-    end
-    if victoryType == "Unknown" then
-        -- Diplomatic: any player with 20+ diplo VP (check all, not just winner — GetStats may fail on winner)
-        pcall(function()
-            for i = 0, 62 do
-                local q = Players[i]
-                if q and q:IsMajor() and q:IsAlive() and q:GetTeam() == winTeam then
-                    local ok, dvp = pcall(function() return q:GetStats():GetDiplomaticVictoryPoints() end)
-                    if ok and dvp and dvp >= 20 then victoryType = "VICTORY_DIPLOMATIC" end
-                end
-            end
-        end)
-    end
-    if victoryType == "Unknown" then
-        -- Science: completed space projects
-        pcall(function()
-            local ok, svp = pcall(function() return wp:GetStats():GetScienceVictoryPoints() end)
-            local ok2, needed = pcall(function() return wp:GetStats():GetScienceVictoryPointsTotalNeeded() end)
-            if ok and ok2 and svp and needed and svp >= needed then victoryType = "VICTORY_TECHNOLOGY" end
-        end)
-    end
-    if victoryType == "Unknown" then
-        -- Domination: owns all original capitals
-        pcall(function()
-            local caps, owned = 0, 0
-            for i = 0, 62 do
-                local q = Players[i]
-                if q and q:IsMajor() and q:IsAlive() and i ~= winnerId then
-                    caps = caps + 1
-                    local oCap = q:GetCities():GetOriginalCapital()
-                    if oCap and oCap:GetOwner() == winnerId then owned = owned + 1 end
-                end
-            end
-            if caps > 0 and owned >= caps then victoryType = "VICTORY_CONQUEST" end
-        end)
-    end
-    if victoryType == "Unknown" then
-        -- Culture: winner's visiting tourists exceed all others' domestic tourists
-        pcall(function()
-            local dominated = true
-            local checked = 0
-            for i = 0, 62 do
-                local q = Players[i]
-                if q and q:IsMajor() and q:IsAlive() and i ~= winnerId then
-                    local okS, stay = pcall(function() return q:GetCulture():GetStaycationers() end)
-                    local okV, visit = pcall(function() return wp:GetCulture():GetTouristsFrom(i) end)
-                    if okS and okV and stay and visit then
-                        checked = checked + 1
-                        if visit < stay then
-                            dominated = false
-                            break
-                        end
-                    end
-                end
-            end
-            if checked > 0 and dominated then victoryType = "VICTORY_CULTURE" end
-        end)
-    end
-    if victoryType == "Unknown" then
-        -- Score: turn limit reached without any other victory condition
-        victoryType = "VICTORY_SCORE"
-    end
-end
--- Emit per-player VP data so Python can cross-check victory type
--- (EndGameMenu APIs for tourism/staycationers are unreliable)
-pcall(function()
-    for i = 0, 62 do
-        local q = Players[i]
-        if q and q:IsMajor() and q:IsAlive() then
-            local tourism, stay, sciVP, sciNeeded, diploVP = 0, 0, 0, 50, 0
-            pcall(function() tourism = q:GetStats():GetTourism() end)
-            pcall(function() stay = q:GetCulture():GetStaycationers() end)
-            pcall(function() sciVP = q:GetStats():GetScienceVictoryPoints() end)
-            pcall(function() sciNeeded = q:GetStats():GetScienceVictoryPointsTotalNeeded() end)
-            pcall(function() diploVP = q:GetStats():GetDiplomaticVictoryPoints() end)
-            print("VP_DATA|" .. i .. "|" .. tourism .. "|" .. stay .. "|" .. sciVP .. "|" .. sciNeeded .. "|" .. diploVP)
-        end
-    end
-end)
-local isDefeat = winTeam >= 0 and Players[me]:GetTeam() ~= winTeam
-local result = isDefeat and "DEFEAT" or "VICTORY"
-print("GAME_OVER|" .. result .. "|" .. winnerName .. "|" .. victoryType .. "|" .. (meAlive and "alive" or "dead") .. "|" .. winnerLeader .. "|" .. winnerId)
-print("{SENTINEL}")
-""".replace("{SENTINEL}", SENTINEL)
-
-
-def _infer_victory_from_vp_data(vp_data: dict[int, dict], winner_id: int) -> str | None:
-    """Infer victory type from per-player VP data when Lua detection fails.
-
-    Returns a VICTORY_* string or None if Score is genuine.
-    """
-    winner = vp_data.get(winner_id)
-    if not winner:
-        return None
-
-    # Science: winner completed all space projects
-    if winner["sci_vp"] > 0 and winner["sci_vp"] >= winner["sci_needed"]:
-        return "VICTORY_TECHNOLOGY"
-
-    # Diplomatic: 20+ DVP
-    if winner["diplo_vp"] >= 20:
-        return "VICTORY_DIPLOMATIC"
-
-    # Culture: winner's tourism exceeds all rivals' staycationers
-    rivals = {pid: d for pid, d in vp_data.items() if pid != winner_id}
-    if winner["tourism"] > 0 and rivals:
-        max_rival_stay = max(r["stay"] for r in rivals.values())
-        if winner["tourism"] > max_rival_stay:
-            return "VICTORY_CULTURE"
-
-    return None
-
-
-def parse_gameover_response(lines: list[str]) -> GameOverStatus | None:
-    """Parse game-over check response. Returns None if game is still active."""
-    game_over_line = None
-    vp_data: dict[int, dict] = {}
-
-    for line in lines:
-        if line == "GAME_ACTIVE":
-            return None
-        if line.startswith("GAME_OVER|"):
-            game_over_line = line
-        elif line.startswith("VP_DATA|"):
-            parts = line.split("|")
-            if len(parts) >= 7:
-                pid = int(parts[1])
-                vp_data[pid] = {
-                    "tourism": int(parts[2]),
-                    "stay": int(parts[3]),
-                    "sci_vp": int(parts[4]),
-                    "sci_needed": int(parts[5]),
-                    "diplo_vp": int(parts[6]),
-                }
-
-    if not game_over_line:
-        return None
-
-    parts = game_over_line.split("|")
-    victory_type = parts[3] if len(parts) > 3 else "Unknown"
-    winner_name = parts[2] if len(parts) > 2 else "Unknown"
-
-    # Cross-check: if Lua reported Score but VP data suggests otherwise
-    winner_id = (
-        int(parts[6]) if len(parts) > 6 and parts[6].lstrip("-").isdigit() else -1
-    )
-    if victory_type == "VICTORY_SCORE" and vp_data and winner_id >= 0:
-        corrected = _infer_victory_from_vp_data(vp_data, winner_id)
-        if corrected:
-            victory_type = corrected
-
-    return GameOverStatus(
-        is_game_over=True,
-        is_defeat=parts[1] == "DEFEAT",
-        winner_name=winner_name,
-        winner_leader=parts[5] if len(parts) > 5 else "Unknown",
-        victory_type=victory_type,
-        player_alive=parts[4] == "alive" if len(parts) > 4 else True,
-    )
-
-
 def parse_overview_response(lines: list[str]) -> GameOverview:
     if not lines:
         raise ValueError("Empty overview response")
@@ -622,97 +313,6 @@ def parse_overview_response(lines: list[str]) -> GameOverview:
     )
 
 
-def build_rival_snapshot_query() -> str:
-    """Lightweight per-rival stats for diary power curves. InGame context.
-
-    Output: one RIVAL| line per met major civ (excluding self).
-    Format: RIVAL|pid|name|score|cities|pop|sci|cul|gold|mil|techs|civics|faith|sciVP|diploVP|resources
-    resources: comma-separated RESOURCE:amount pairs for non-zero stockpiles, e.g. IRON:5,HORSES:2
-    """
-    return (
-        "local me = Game.GetLocalPlayer() "
-        "local pDiplo = Players[me]:GetDiplomacy() "
-        "for i = 0, 62 do "
-        "  if i ~= me and Players[i] and Players[i]:IsMajor() and Players[i]:IsAlive() and pDiplo:HasMet(i) then "
-        "    local cfg = PlayerConfigurations[i] "
-        "    local name = Locale.Lookup(cfg:GetCivilizationShortDescription()) "
-        "    local p = Players[i] "
-        "    local score = p:GetScore() "
-        "    local nCities, totalPop = 0, 0 "
-        "    for _, c in p:GetCities():Members() do nCities = nCities + 1; totalPop = totalPop + c:GetPopulation() end "
-        "    local sci = p:GetTechs():GetScienceYield() "
-        "    local cul = p:GetCulture():GetCultureYield() "
-        "    local gold = p:GetTreasury():GetGoldYield() - p:GetTreasury():GetTotalMaintenance() "
-        "    local st = p:GetStats() "
-        "    local mil = st:GetMilitaryStrength() "
-        "    local techs = st:GetNumTechsResearched() "
-        "    local civics = st:GetNumCivicsCompleted() "
-        "    local sciVP = st:GetScienceVictoryPoints() "
-        "    local diploVP = st:GetDiplomaticVictoryPoints() "
-        "    local faith = 0 "
-        "    pcall(function() faith = p:GetReligion():GetFaithBalance() end) "
-        '    local resStr = "" '
-        "    local pRes = p:GetResources() "
-        "    for row in GameInfo.Resources() do "
-        '      if row.ResourceClassType == "RESOURCECLASS_STRATEGIC" then '
-        "        local amt = 0 "
-        "        pcall(function() amt = pRes:GetResourceAmount(row.Index) end) "
-        "        if amt and amt > 0 then "
-        '          local rName = row.ResourceType:gsub("RESOURCE_", "") '
-        '          resStr = resStr .. (resStr ~= "" and "," or "") .. rName .. ":" .. amt '
-        "        end "
-        "      end "
-        "    end "
-        '    print("RIVAL|" .. i .. "|" .. name .. "|" .. score .. "|" .. nCities .. "|" .. totalPop '
-        '      .. "|" .. string.format("%.1f", sci) .. "|" .. string.format("%.1f", cul) '
-        '      .. "|" .. string.format("%.1f", gold) .. "|" .. mil .. "|" .. techs .. "|" .. civics '
-        '      .. "|" .. string.format("%.1f", faith) .. "|" .. sciVP .. "|" .. diploVP .. "|" .. resStr) '
-        "  end "
-        "end "
-        f'print("{SENTINEL}")'
-    )
-
-
-def parse_rival_snapshot_response(lines: list[str]) -> list[RivalSnapshot]:
-    """Parse RIVAL| lines from build_rival_snapshot_query."""
-    rivals = []
-    for line in lines:
-        if not line.startswith("RIVAL|"):
-            continue
-        p = line.split("|")
-        if len(p) < 15:
-            continue
-        stockpiles = {}
-        if len(p) > 15 and p[15]:
-            for pair in p[15].split(","):
-                if ":" in pair:
-                    k, v = pair.split(":", 1)
-                    try:
-                        stockpiles[k] = int(v)
-                    except ValueError:
-                        pass
-        rivals.append(
-            RivalSnapshot(
-                id=int(p[1]),
-                name=p[2],
-                score=_int(p[3]),
-                cities=_int(p[4]),
-                pop=_int(p[5]),
-                sci=round(float(p[6]), 1),
-                cul=round(float(p[7]), 1),
-                gold=round(float(p[8]), 1),
-                mil=_int(p[9]),
-                techs=_int(p[10]),
-                civics=_int(p[11]),
-                faith=round(float(p[12]), 1),
-                sci_vp=_int(p[13]),
-                diplo_vp=_int(p[14]),
-                stockpiles=stockpiles,
-            )
-        )
-    return rivals
-
-
 # ------------------------------------------------------------------
 # Diary full snapshot — one row per player per turn + city detail
 # ------------------------------------------------------------------
@@ -721,7 +321,7 @@ def parse_rival_snapshot_response(lines: list[str]) -> list[RivalSnapshot]:
 def build_diary_full_query() -> str:
     """Single InGame round-trip: full per-turn snapshot for diary JSONL.
 
-    Emits per-player lines (all alive major civs, omniscient):
+    Emits lines for the local player:
         PLAYER|pid|civ|leader|score|cities|pop|sci|cul|gold|goldPT|
               faith|faithPT|favor|favorPT|mil|techsN|civicsN|
               districts|wonders|greatWorks|territory|improvements|
@@ -735,8 +335,6 @@ def build_diary_full_query() -> str:
         PLUXURIES|pid|TYPE:N,TYPE:N,...
         PSTOCKPILES|pid|TYPE:N,TYPE:N,...
         PUNITS|pid|total|mil|civ|sup|TYPE:N,TYPE:N,...
-        PCITY|pid|cityId|name|pop|food|prod|gold|sci|cul|faith|
-              housing|am|amNeed|districts|producing|loyalty|loyaltyPT
 
     Agent-only (local player):
         ADIPLO|rivalName|stateIdx|allianceType|allianceLevel|grievances
@@ -762,8 +360,8 @@ def build_diary_full_query() -> str:
         # Build alive-major player list + visibility handles once
         "local aliveMajors = {} "
         "local aliveVis = {} "
-        "for i = 0, 62 do "
-        "  if Players[i] and Players[i]:IsMajor() and Players[i]:IsAlive() then "
+        "for _, i in ipairs({me}) do "
+        "  if Players[i] then "
         "    aliveMajors[#aliveMajors+1] = i "
         "    aliveVis[i] = PlayersVisibility[i] "
         "  end "
@@ -787,15 +385,10 @@ def build_diary_full_query() -> str:
         "    end "
         "  end "
         "end "
-        # Hash name lookup for production
-        "local hashName = {} "
-        "for u in GameInfo.Units() do hashName[u.Hash] = u.UnitType end "
-        "for b in GameInfo.Buildings() do hashName[b.Hash] = b.BuildingType end "
-        "for d in GameInfo.Districts() do hashName[d.Hash] = d.DistrictType end "
-        "for pr in GameInfo.Projects() do hashName[pr.Hash] = pr.ProjectType end "
-        # === Player loop (omniscient — all alive major civs) ===
-        "for i = 0, 62 do "
-        "if Players[i] and Players[i]:IsMajor() and Players[i]:IsAlive() then "
+        # === Player loop (the local player only — a stand-in never records
+        # another human's figures) ===
+        "for _, i in ipairs({me}) do "
+        "if Players[i] then "
         "  local p = Players[i] "
         "  local cfg = PlayerConfigurations[i] "
         "  local civName = Locale.Lookup(cfg:GetCivilizationShortDescription()) "
@@ -1075,56 +668,6 @@ def build_diary_full_query() -> str:
         "  end "
         '  print("PUNITS|" .. i .. "|" .. nTotal .. "|" .. nMil '
         '    .. "|" .. nCiv .. "|" .. nSup .. "|" .. compStr) '
-        # --- PCITY per city ---
-        "  for _, c in p:GetCities():Members() do "
-        "    local cID = c:GetID() "
-        "    local cName = Locale.Lookup(c:GetName()) "
-        "    local cPop = c:GetPopulation() "
-        "    local g = c:GetGrowth() "
-        # Production
-        '    local producing = "NONE" '
-        "    pcall(function() "
-        "      local bq = c:GetBuildQueue() "
-        "      if bq:GetSize() > 0 then "
-        "        local h = bq:GetCurrentProductionTypeHash() "
-        '        producing = hashName[h] or "UNKNOWN" '
-        "      end "
-        "    end) "
-        # Districts in this city
-        '    local dStr = "" '
-        "    for _, d in c:GetDistricts():Members() do "
-        "      local dInfo = GameInfo.Districts[d:GetType()] "
-        "      if dInfo then "
-        '        local short = string.gsub(dInfo.DistrictType, "DISTRICT_", "") '
-        '        dStr = dStr .. (dStr ~= "" and "," or "") .. short '
-        "      end "
-        "    end "
-        # Loyalty
-        "    local loyalty, loyaltyPT = 100.0, 0.0 "
-        "    pcall(function() "
-        "      local ci = c:GetCulturalIdentity() "
-        "      loyalty = ci:GetLoyalty() "
-        "      loyaltyPT = ci:GetLoyaltyPerTurn() "
-        "    end) "
-        # Amenities needed
-        "    local amNeed = 0 "
-        "    pcall(function() amNeed = g:GetAmenitiesNeeded() end) "
-        "    local amTotal = amNeed + g:GetAmenities() "
-        # Print PCITY
-        '    print("PCITY|" .. i .. "|" .. cID '
-        '      .. "|" .. cName .. "|" .. cPop '
-        '      .. "|" .. string.format("%.1f", c:GetYield(0)) '
-        '      .. "|" .. string.format("%.1f", c:GetYield(1)) '
-        '      .. "|" .. string.format("%.1f", c:GetYield(2)) '
-        '      .. "|" .. string.format("%.1f", c:GetYield(3)) '
-        '      .. "|" .. string.format("%.1f", c:GetYield(4)) '
-        '      .. "|" .. string.format("%.1f", c:GetYield(5)) '
-        '      .. "|" .. string.format("%.1f", g:GetHousing()) '
-        '      .. "|" .. amTotal .. "|" .. amNeed '
-        '      .. "|" .. dStr .. "|" .. producing '
-        '      .. "|" .. string.format("%.1f", loyalty) '
-        '      .. "|" .. string.format("%.1f", loyaltyPT)) '
-        "  end "
         "end "
         "end "
         # === Agent-only section ===
@@ -1281,7 +824,6 @@ def _parse_kv_pairs(s: str) -> dict[str, int]:
 def parse_diary_full_response(lines: list[str]) -> DiarySnapshot:
     """Parse tagged lines from build_diary_full_query into a DiarySnapshot."""
     players: list[PlayerRow] = []
-    cities: list[CityRow] = []
     agent = AgentExtras()
     player_map: dict[int, PlayerRow] = {}
 
@@ -1390,32 +932,6 @@ def parse_diary_full_response(lines: list[str]) -> DiarySnapshot:
                     player_map[pid].units_support = _int(p[5])
                     player_map[pid].unit_composition = _parse_kv_pairs(p[6])
 
-        elif line.startswith("PCITY|"):
-            p = line.split("|")
-            if len(p) >= 18:
-                cities.append(
-                    CityRow(
-                        pid=int(p[1]),
-                        city_id=int(p[2]),
-                        city=p[3],
-                        pop=_int(p[4]),
-                        food=round(float(p[5]), 1),
-                        production=round(float(p[6]), 1),
-                        gold=round(float(p[7]), 1),
-                        science=round(float(p[8]), 1),
-                        culture=round(float(p[9]), 1),
-                        faith=round(float(p[10]), 1),
-                        housing=round(float(p[11]), 1),
-                        amenities=_int(p[12]),
-                        amenities_needed=_int(p[13]),
-                        districts=p[14],
-                        producing=p[15],
-                        loyalty=round(float(p[16]), 1),
-                        loyalty_per_turn=round(float(p[17]), 1),
-                    )
-                )
-
-        # --- Agent-only lines ---
         elif line.startswith("ADIPLO|"):
             p = line.split("|")
             if len(p) >= 6:
@@ -1456,4 +972,4 @@ def parse_diary_full_response(lines: list[str]) -> DiarySnapshot:
         elif line.startswith("AGPPTS|"):
             agent.gp_points = _parse_kv_pairs(line[7:])
 
-    return DiarySnapshot(players=players, cities=cities, agent=agent)
+    return DiarySnapshot(players=players, agent=agent)
