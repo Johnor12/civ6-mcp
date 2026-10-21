@@ -53,7 +53,7 @@ mcp = FastMCP(
     instructions=(
         "Plays one absent player's turn in a local Civ 6 hotseat game. Start with "
         "hotseat_status, then begin_standin_turn(leader) for the player named on the "
-        "turn-change screen, then get_diary and get_game_overview. Finish with end_turn "
+        "turn-change screen; its reply is the turn briefing (diary, overview, cities, units, world map). Finish with end_turn "
         "exactly once."
     ),
     lifespan=lifespan,
@@ -193,8 +193,9 @@ async def begin_standin_turn(ctx: Context, leader: str, note: str = "") -> str:
                 "LEADER_POUNDMAKER" (as shown by hotseat_status).
         note: What the absent player asked for this turn, in their words.
 
-    Start the turn with get_diary (the player's memory from earlier
-    stand-ins), then get_game_overview.
+    The reply ends with the turn briefing: everything this player can
+    see (diary, overview, notifications, pending deals, cities, units and
+    the world map). get_turn_briefing refreshes it mid-turn.
     """
     s = _session(ctx)
     lid = _hotseat.normalize_leader(leader)
@@ -228,13 +229,99 @@ async def begin_standin_turn(ctx: Context, leader: str, note: str = "") -> str:
     cfg.next_player = ""
     _standin.save_config(cfg)
     s.guard.invalidate()
-    return (
+    head = (
         f"Stand-in armed for {cfg.leader_display} ('{st.player_name}'), turn "
         f"{st.turn}. The turn-change screen was dismissed and the game is "
         "unpaused; it is this player's turn.\n"
         + _standin.status_text(cfg)
-        + "\nStart with get_diary, then get_game_overview."
     )
+    try:
+        briefing = await _turn_briefing(s)
+    except Exception as e:  # noqa: BLE001 - the seat is taken; report, don't fail
+        briefing = (
+            f"(turn briefing unavailable: {e}; call get_turn_briefing or the "
+            "individual query tools)"
+        )
+    return head + "\n\n" + briefing
+
+
+async def _units_text(gs: GameState) -> str:
+    units = await gs.get_units()
+    try:
+        threats = await gs.get_threat_scan()
+    except Exception:
+        threats = None
+    try:
+        trade_status = await gs.get_trade_routes()
+    except Exception:
+        trade_status = None
+    return nr.narrate_units(units, threats, trade_status)
+
+
+async def _cities_text(gs: GameState) -> str:
+    cities, distances = await gs.get_cities()
+    return nr.narrate_cities(cities, distances)
+
+
+async def _turn_briefing(s: Session) -> str:
+    """Everything the player can see this turn, in one reply."""
+    gs = s.game
+    parts: list[str] = []
+
+    async def section(title: str, fn: Callable[[], Awaitable[str]]) -> None:
+        try:
+            text = await fn()
+        except Exception as e:  # noqa: BLE001 - one failed section must not hide the rest
+            text = f"(unavailable: {e})"
+        parts.append(f"=== {title} ===\n{text}")
+
+    async def diary_text() -> str:
+        civ, seed = await gs.get_game_identity()
+        entries = _diary.read_entries(_diary.diary_path(civ, seed))
+        if not entries:
+            return "No diary entries yet for this player."
+        more = f" ({len(entries) - 1} earlier: get_diary)" if len(entries) > 1 else ""
+        return _diary.format_entry(entries[-1]) + more
+
+    async def overview_text() -> str:
+        text = nr.narrate_overview(await gs.get_game_overview())
+        cfg = _standin.active_config()
+        if cfg is not None:
+            text += "\n\n" + _standin.status_text(cfg)
+        return text
+
+    await section("Overview", overview_text)
+    await section("Diary (last entry)", diary_text)
+    await section(
+        "Notifications", lambda: _narrate(gs.get_notifications, nr.narrate_notifications)
+    )
+    await section(
+        "Pending trades", lambda: _narrate(gs.get_pending_deals, nr.narrate_pending_deals)
+    )
+    await section(
+        "Pending diplomacy",
+        lambda: _narrate(gs.get_diplomacy_sessions, nr.narrate_diplomacy_sessions),
+    )
+    await section("Cities", lambda: _cities_text(gs))
+    await section("Units", lambda: _units_text(gs))
+    await section(
+        "World", lambda: _narrate(gs.get_world_snapshot, nr.narrate_world_snapshot)
+    )
+    return "\n\n".join(parts)
+
+
+@mcp.tool(annotations={"readOnlyHint": True})
+async def get_turn_briefing(ctx: Context) -> str:
+    """Everything this player can see, in one reply.
+
+    Overview, last diary entry, notifications, pending trades and
+    diplomacy, cities, units with nearby threats, and the world snapshot:
+    an ASCII hex map of every revealed tile plus every resource,
+    improvement, district, wonder, unit and city on them. begin_standin_turn
+    returns the same briefing; call this to refresh it after moving.
+    """
+    s = _session(ctx)
+    return await _logged(ctx, "get_turn_briefing", {}, lambda: _turn_briefing(s))
 
 
 @mcp.tool(annotations={"destructiveHint": True})
@@ -435,20 +522,7 @@ async def get_units(ctx: Context) -> str:
     threats, and trader status.
     """
     gs = _game(ctx)
-
-    async def _run() -> str:
-        units = await gs.get_units()
-        try:
-            threats = await gs.get_threat_scan()
-        except Exception:
-            threats = None
-        try:
-            trade_status = await gs.get_trade_routes()
-        except Exception:
-            trade_status = None
-        return nr.narrate_units(units, threats, trade_status)
-
-    return await _logged(ctx, "get_units", {}, _run)
+    return await _logged(ctx, "get_units", {}, lambda: _units_text(gs))
 
 
 @mcp.tool(annotations={"readOnlyHint": True})
@@ -499,12 +573,7 @@ async def get_cities(ctx: Context) -> str:
     warnings with flip timers.
     """
     gs = _game(ctx)
-
-    async def _run() -> str:
-        cities, distances = await gs.get_cities()
-        return nr.narrate_cities(cities, distances)
-
-    return await _logged(ctx, "get_cities", {}, _run)
+    return await _logged(ctx, "get_cities", {}, lambda: _cities_text(gs))
 
 
 @mcp.tool(annotations={"readOnlyHint": True})

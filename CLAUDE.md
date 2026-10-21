@@ -20,8 +20,10 @@ query what you need before deciding.
 2. `begin_standin_turn(leader, note)` — takes that player's seat (presses
    Start Turn for them) and arms stand-in mode. It refuses if the screen
    shows someone else: never play a different player than the one named.
-3. `get_diary` — this player's memory from earlier stand-ins — then
-   `get_game_overview` and the turn loop below.
+   Its reply is the **turn briefing**: overview, the last diary entry,
+   notifications, pending deals, cities, units and the world snapshot.
+3. Read the briefing, then run the turn loop below. `get_turn_briefing`
+   returns a fresh briefing mid-turn; `get_diary` has older entries.
 4. `end_turn` exactly once when the turn is done. It refuses while a
    diplomacy encounter or incoming deal is open, while a blocker remains,
    or while any unit still needs orders; then it ends the turn for real,
@@ -46,12 +48,26 @@ While the **STAND-IN MODE** paragraph shows in `get_game_overview`:
 Hex grid (X, Y) where **higher Y is visually south**. X increases east.
 Moving from (9,24) to (9,26) is south.
 
+## The world snapshot
+
+The briefing's World section is everything this player can see, the way a
+human sees the map: an ASCII hex grid of every revealed tile (terrain,
+feature, river/coast; legend printed with it; odd rows sit half a tile
+east) and, grouped by name, every resource, improvement, district, wonder,
+foreign unit and city on revealed tiles, with the distance from your
+nearest unit for things outside your borders. Tribal villages show up as
+`GOODY_HUT` under Improvements: walk any unit onto one for a free bonus.
+Barbarian camps are `BARBARIAN_CAMP`. A `~` after a coordinate means the
+tile is in fog, so what was there may have changed.
+
 ## Turn loop
 
-1. `get_game_overview` — turn, yields, research, score, the stand-in note.
-2. `get_notifications` and `get_pending_trades` — anything waiting for this player.
-3. `get_units` — positions, HP, moves, charges, nearby threats.
-4. `get_map_area` around cities and units when deciding where to move.
+1. The briefing — turn, yields, research, notifications, pending deals,
+   cities, units, world. Check it against the diary's plan.
+2. Anything **Action Required** in Notifications is resolved first.
+3. `get_units` after moving when you need fresh positions and threats.
+4. `get_map_area` for tile yields and movement costs when choosing a
+   destination; the snapshot grid shows terrain but not yields.
 5. Move or order each unit (`unit_action`); `get_builder_tasks` for builders.
 6. `get_cities` — queues, growth, pillaged districts; `set_city_production`
    where a queue is empty, `get_district_advisor` before placing a district.

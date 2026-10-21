@@ -313,6 +313,12 @@ def _append_builder_list(lines: list[str], builders: list[lq.BuilderInfo]) -> No
             )
 
 
+def _tile_label(entry: str) -> str:
+    """'STONE@7,25' -> 'STONE (7,25)'; entries without '@' pass through."""
+    name, sep, coords = entry.partition("@")
+    return f"{name} ({coords})" if sep else name
+
+
 def narrate_cities(
     cities: list[lq.CityInfo], distances: list[str] | None = None
 ) -> str:
@@ -408,12 +414,12 @@ def narrate_cities(
                 " (repair via set_city_production)"
             )
         if c.pillaged_improvements:
-            pill_imps = [p.split("@")[0] for p in c.pillaged_improvements]
+            pill_imps = [_tile_label(p) for p in c.pillaged_improvements]
             lines.append(
                 f"    !! PILLAGED TILES: {', '.join(pill_imps)} (send builder to repair)"
             )
         if c.unimproved_resources:
-            res_names = [r.split("@")[0] for r in c.unimproved_resources]
+            res_names = [_tile_label(r) for r in c.unimproved_resources]
             lines.append(f"    Needs builder: {', '.join(res_names)} (unimproved)")
     if distances:
         lines.append("")
@@ -2060,3 +2066,159 @@ def narrate_notifications(notifs: list[lq.GameNotification]) -> str:
     return "\n".join(lines)
 
 
+
+
+# ---------------------------------------------------------------------------
+# World snapshot
+# ---------------------------------------------------------------------------
+
+_WORLD_LEGEND = (
+    "Hex grid, 3 chars per tile: terrain, feature, water. Odd rows sit half a "
+    "tile east of even rows. Blank = unexplored.\n"
+    "  terrain: g grass, p plains, d desert, t tundra, s snow, c coast, o ocean, "
+    "M mountain; UPPERCASE = hills\n"
+    "  feature: f forest, j jungle, m marsh, F floodplain, a oasis, r reef, i ice, "
+    "v volcano, e geothermal, l volcanic soil, W natural wonder, @ your city, "
+    "# other city, . none\n"
+    "  water: ~ river, = lake/oasis fresh water, , coastal land"
+)
+
+
+def _owner_tag(snap: lq.WorldSnapshot, owner_id: int) -> str:
+    if owner_id < 0:
+        return ""
+    return f" [{snap.owners.get(owner_id, f'player{owner_id}')}]"
+
+
+def _coord(x: int, y: int, fogged: bool) -> str:
+    return f"({x},{y}){'~' if fogged else ''}"
+
+
+def _group(items, key, fmt) -> list[str]:
+    """'NAME: (x,y) (x,y) | NAME2: ...' grouped by key, in first-seen order."""
+    groups: dict[str, list[str]] = {}
+    for it in items:
+        groups.setdefault(key(it), []).append(fmt(it))
+    return [f"{k}: {' '.join(v)}" for k, v in groups.items()]
+
+
+def narrate_world_snapshot(snap: lq.WorldSnapshot) -> str:
+    if snap.nothing_revealed or snap.max_x < 0:
+        return "Nothing revealed yet."
+    w = snap.max_x - snap.min_x + 1
+    h = snap.max_y - snap.min_y + 1
+    lines = [
+        f"Revealed area x {snap.min_x}-{snap.max_x}, y {snap.min_y}-{snap.max_y} "
+        f"({w}x{h} of a {snap.map_w}x{snap.map_h} map). Higher y is south.",
+        _WORLD_LEGEND,
+        "",
+    ]
+    header = "      " + "".join(
+        f"{x:<3d}" if x % 5 == 0 else "   " for x in range(snap.min_x, snap.max_x + 1)
+    )
+    lines.append(header.rstrip())
+    for y, cells in snap.rows:
+        indent = " " if y % 2 == 1 else ""
+        lines.append(f"y={y:<3d} {indent}{cells}".rstrip())
+    lines.append("")
+
+    def near(d: int, who: str) -> str:
+        if d >= 999 or not who:
+            return ""
+        return f"[{d} from {who}]"
+
+    mine = [c for c in snap.cities if snap.owners.get(c.owner_id) == "YOU"]
+    others = [c for c in snap.cities if snap.owners.get(c.owner_id) != "YOU"]
+    if mine:
+        lines.append(
+            "Your cities: "
+            + " | ".join(
+                f"{c.name} ({c.x},{c.y}) pop {c.population}"
+                + (" capital" if c.is_capital else "")
+                for c in mine
+            )
+        )
+    if others:
+        lines.append(
+            "Other cities: "
+            + " | ".join(
+                f"{c.name}{_owner_tag(snap, c.owner_id)} ({c.x},{c.y}) pop {c.population}"
+                + (" capital" if c.is_capital else "")
+                for c in others
+            )
+        )
+    if snap.territory:
+        lines.append(
+            "Territory: "
+            + " | ".join(
+                f"{snap.owners.get(t.owner_id, f'player{t.owner_id}')} {t.tiles} tiles "
+                f"x{t.min_x}-{t.max_x} y{t.min_y}-{t.max_y}"
+                for t in sorted(snap.territory, key=lambda t: -t.tiles)
+            )
+        )
+    if snap.resources:
+        lines.append(
+            "Resources (+ luxury, * strategic; ! unimproved in your territory; "
+            "~ in fog):"
+        )
+        lines.extend(
+            "  " + g
+            for g in _group(
+                snap.resources,
+                lambda r: r.name,
+                lambda r: _coord(r.x, r.y, r.fogged)
+                + (
+                    "!"
+                    if not r.improved and snap.owners.get(r.owner_id) == "YOU"
+                    else ""
+                ),
+            )
+        )
+    if snap.improvements:
+        lines.append("Improvements (outside your borders: distance from your nearest unit):")
+        lines.extend(
+            "  " + g
+            for g in _group(
+                snap.improvements,
+                lambda i: i.name,
+                lambda i: _coord(i.x, i.y, i.fogged)
+                + (
+                    ""
+                    if snap.owners.get(i.owner_id) == "YOU"
+                    else _owner_tag(snap, i.owner_id)
+                    + near(i.unit_distance, i.nearest_unit)
+                ),
+            )
+        )
+    if snap.districts:
+        lines.append("Districts:")
+        lines.extend(
+            "  " + g
+            for g in _group(
+                snap.districts,
+                lambda d: d.name,
+                lambda d: _coord(d.x, d.y, d.fogged) + _owner_tag(snap, d.owner_id),
+            )
+        )
+    if snap.wonders:
+        lines.append("Wonders:")
+        lines.extend(
+            "  " + g
+            for g in _group(
+                snap.wonders,
+                lambda d: d.name,
+                lambda d: _coord(d.x, d.y, d.fogged) + _owner_tag(snap, d.owner_id),
+            )
+        )
+    if snap.units:
+        lines.append("Units in sight (not yours):")
+        lines.extend(
+            "  " + g
+            for g in _group(
+                snap.units,
+                lambda u: snap.owners.get(u.owner_id, f"player{u.owner_id}"),
+                lambda u: f"{u.unit_type} ({u.x},{u.y}) {u.hp}/{u.max_hp}hp"
+                + near(u.unit_distance, u.nearest_unit),
+            )
+        )
+    return "\n".join(lines)

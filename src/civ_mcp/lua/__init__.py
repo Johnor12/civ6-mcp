@@ -273,6 +273,15 @@ from civ_mcp.lua.units import (  # noqa: F401
     parse_threat_scan_response,
     parse_units_response,
 )
+from civ_mcp.lua.world import (  # noqa: F401
+    SeenCity,
+    SeenUnit,
+    Territory,
+    TileMark,
+    WorldSnapshot,
+    build_world_snapshot_query,
+    parse_world_snapshot_response,
+)
 from civ_mcp.lua.victory import (  # noqa: F401
     build_victory_progress_query,
     parse_victory_progress_response,

@@ -1150,3 +1150,74 @@ class BuilderInfo:
     y: int
     charges: int
     moves: float
+
+
+# ---------------------------------------------------------------------------
+# World snapshot (lua/world.py)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class TileMark:
+    """One attribute on one revealed tile: a resource, improvement, district or wonder."""
+
+    name: str
+    x: int
+    y: int
+    fogged: bool  # revealed but not currently visible: may be stale
+    owner_id: int  # -1 if unowned
+    unit_distance: int = 999  # hex distance to the nearest own unit
+    nearest_unit: str = ""  # "WARRIOR#1" (type#idx)
+    improved: bool = False  # resources only
+
+
+@dataclass
+class SeenUnit:
+    owner_id: int
+    unit_type: str
+    x: int
+    y: int
+    hp: int
+    max_hp: int
+    unit_distance: int = 999
+    nearest_unit: str = ""
+
+
+@dataclass
+class SeenCity:
+    owner_id: int
+    name: str
+    x: int
+    y: int
+    population: int
+    is_capital: bool
+
+
+@dataclass
+class Territory:
+    owner_id: int
+    tiles: int
+    min_x: int
+    min_y: int
+    max_x: int
+    max_y: int
+
+
+@dataclass
+class WorldSnapshot:
+    min_x: int = 0
+    min_y: int = 0
+    max_x: int = -1
+    max_y: int = -1
+    map_w: int = 0
+    map_h: int = 0
+    rows: list[tuple[int, str]] = field(default_factory=list)  # (y, cells)
+    resources: list[TileMark] = field(default_factory=list)
+    improvements: list[TileMark] = field(default_factory=list)
+    districts: list[TileMark] = field(default_factory=list)
+    wonders: list[TileMark] = field(default_factory=list)
+    units: list[SeenUnit] = field(default_factory=list)
+    cities: list[SeenCity] = field(default_factory=list)
+    territory: list[Territory] = field(default_factory=list)
+    owners: dict[int, str] = field(default_factory=dict)
+    nothing_revealed: bool = False

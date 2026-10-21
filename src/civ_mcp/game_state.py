@@ -126,6 +126,10 @@ class GameState:
         )
         return lq.parse_map_response(lines)
 
+    async def get_world_snapshot(self) -> lq.WorldSnapshot:
+        lines = await self.conn.execute(lq.build_world_snapshot_query(), timeout=20.0)
+        return lq.parse_world_snapshot_response(lines)
+
     async def get_strategic_map(self) -> lq.StrategicMapData:
         lines = await self.conn.execute(lq.build_strategic_map_query())
         return lq.parse_strategic_map_response(lines)
