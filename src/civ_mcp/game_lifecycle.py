@@ -468,7 +468,7 @@ async def load_game_save(conn: GameConnection, save_name: str) -> str:
                 f"  UI.CloseFileListQuery(qid); "
                 f"  LuaEvents.FileListQueryResults.Remove(OnResults); "
                 f"  for i, s in ipairs(fileList) do "
-                f'    if s.Name == "{save_name}" then '
+                f'    if s.Name == "{save_name}" or s.Name == "{save_name}.Civ6Save" then '
                 f'      ExposedMembers.MCPLoadResult = "FOUND"; '
                 f"      ExposedMembers.MCPLoadDone = true; "
                 f"      Network.LeaveGame(); "

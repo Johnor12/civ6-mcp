@@ -1836,7 +1836,7 @@ def _bring_to_front_win32() -> None:
     try:
         # Attach our thread to the foreground window's thread
         fg_thread = user32.GetWindowThreadProcessId(user32.GetForegroundWindow(), None)
-        our_thread = user32.GetCurrentThreadId()
+        our_thread = ctypes.windll.kernel32.GetCurrentThreadId()
         attached = False
         if fg_thread != our_thread:
             attached = user32.AttachThreadInput(our_thread, fg_thread, True)
