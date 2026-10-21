@@ -208,6 +208,16 @@ class GameState:
                                     )
                                     if (now_x, now_y) != (tx, ty):
                                         result += f"|STOPPED_MID_PATH (moves exhausted)"
+                                    village = any(
+                                        l == f"GOODY|{tx},{ty}" for l in lines
+                                    ) and (now_x, now_y) == (tx, ty)
+                                    changes = lq.describe_move_changes(
+                                        lq.parse_unit_snapshot(lines),
+                                        lq.parse_unit_snapshot(pos_lines),
+                                        village,
+                                    )
+                                    if changes:
+                                        result += "|" + changes
                         break
             except Exception:
                 pass

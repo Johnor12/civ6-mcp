@@ -260,6 +260,8 @@ from civ_mcp.lua.units import (  # noqa: F401
     build_repair_improvement,
     build_sacrifice_builder_charges,
     build_move_unit,
+    describe_move_changes,
+    parse_unit_snapshot,
     build_skip_remaining_units,
     build_skip_unit,
     build_sleep_unit,

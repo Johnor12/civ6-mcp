@@ -29,7 +29,10 @@ query what you need before deciding.
    or while any unit still needs orders; then it ends the turn for real,
    waits for the next human's turn-change screen and saves there. After
    it reports TURN ENDED every game tool is locked again: stop. Never load
-   other saves or "continue".
+   other saves or "continue". If it reports the turn was **interrupted**
+   (an automated scout walked into a village, a wonder or a stranger while
+   the turn ended), the seat is still yours: read the notifications it
+   lists, give any new orders, and call `end_turn` once more.
 
 While the **STAND-IN MODE** paragraph shows in `get_game_overview`:
 
@@ -92,7 +95,7 @@ issues"), **planning** (concrete actions for the next few turns),
 
 | Action | Effect | Notes |
 |--------|--------|-------|
-| `move` | Move to tile | target_x, target_y required; the reply shows where the unit actually stopped |
+| `move` | Move to tile | target_x, target_y required; the reply shows where the unit actually stopped, and what a tribal village gave (gold, faith, a new unit with its id) |
 | `attack` | Attack enemy | shows a damage estimate; melee/ranged auto-detected |
 | `fortify` / `heal` / `alert` / `sleep` / `skip` | Settle a unit for the turn | `heal` wakes at full HP, `alert` wakes when an enemy appears |
 | `automate` | Auto-explore | scouts |

@@ -188,6 +188,23 @@ print("{SENTINEL}")
 """.replace("{SENTINEL}", SENTINEL)
 
 
+# Gold, faith and the unit roster, printed before and after a move so the
+# caller can say what a tribal village (or a capture) gave the player.
+_LUA_SNAPSHOT = """
+pcall(function()
+    local sp = Players[me]
+    local gold = math.floor(sp:GetTreasury():GetGoldBalance())
+    local faith = math.floor(sp:GetReligion():GetFaithBalance())
+    local ids = {}
+    for _, su in sp:GetUnits():Members() do
+        local sinfo = GameInfo.Units[su:GetType()]
+        ids[#ids + 1] = su:GetID() .. ":" .. (sinfo and sinfo.UnitType or "UNIT") .. "@" .. su:GetX() .. "," .. su:GetY()
+    end
+    print("SNAP|" .. gold .. "|" .. faith .. "|" .. table.concat(ids, ";"))
+end)
+"""
+
+
 def build_move_unit(unit_index: int, target_x: int, target_y: int) -> str:
     return f"""
 {_lua_get_unit(unit_index)}
@@ -227,11 +244,72 @@ end
 if hasHostile then
     params[UnitOperationTypes.PARAM_MODIFIERS] = UnitOperationMoveModifiers.ATTACK
 end
+-- A tribal village on the target tile: the caller reports what it gave.
+pcall(function()
+    local tp = Map.GetPlot({target_x}, {target_y})
+    local it = tp and tp:GetImprovementType() or -1
+    local ie = it >= 0 and GameInfo.Improvements[it] or nil
+    if ie and ie.ImprovementType == "IMPROVEMENT_GOODY_HUT" then print("GOODY|{target_x},{target_y}") end
+end)
+{_LUA_SNAPSHOT}
 UnitManager.RequestOperation(unit, UnitOperationTypes.MOVE_TO, params)
 local tag = hasHostile and "OK:CAPTURE_MOVE|" or "OK:MOVING_TO|"
 print(tag .. {target_x} .. "," .. {target_y} .. "|from:" .. fromX .. "," .. fromY)
 print("{SENTINEL}")
 """
+
+
+def parse_unit_snapshot(lines: list[str]) -> tuple[int, int, dict[int, str]] | None:
+    """(gold, faith, {unit id: "UNIT_TYPE@x,y"}) from a SNAP| line, or None."""
+    for line in lines:
+        if not line.startswith("SNAP|"):
+            continue
+        parts = line.split("|", 3)
+        if len(parts) < 4:
+            continue
+        try:
+            gold, faith = int(parts[1]), int(parts[2])
+        except ValueError:
+            continue
+        units: dict[int, str] = {}
+        for item in parts[3].split(";"):
+            uid, _, desc = item.partition(":")
+            if uid.lstrip("-").isdigit() and desc:
+                units[int(uid)] = desc
+        return gold, faith, units
+    return None
+
+
+def describe_move_changes(
+    pre: tuple[int, int, dict[int, str]] | None,
+    post: tuple[int, int, dict[int, str]] | None,
+    village_taken: bool,
+) -> str:
+    """What a move changed for the player: a village taken, gold, faith, units."""
+    parts: list[str] = []
+    if village_taken:
+        parts.append("TRIBAL_VILLAGE taken")
+    if pre and post:
+        if post[0] != pre[0]:
+            parts.append(f"gold {post[0] - pre[0]:+d}")
+        if post[1] != pre[1]:
+            parts.append(f"faith {post[1] - pre[1]:+d}")
+        new = []
+        for uid, desc in post[2].items():
+            if uid not in pre[2]:
+                utype, _, at = desc.partition("@")
+                new.append(f"{utype} (id {uid}) at {at}")
+        if new:
+            parts.append("new units: " + ", ".join(new))
+        lost = [desc.partition("@")[0] for uid, desc in pre[2].items() if uid not in post[2]]
+        if lost:
+            parts.append("units lost: " + ", ".join(lost))
+    if village_taken and len(parts) == 1:
+        parts.append(
+            "reward was not gold, faith or a unit: check get_notifications and "
+            "get_tech_civics for a boost"
+        )
+    return "|".join(parts)
 
 
 def build_unit_position_query(
@@ -295,7 +373,7 @@ end)
 local me = Game.GetLocalPlayer()
 local u = Players[me]:GetUnits():FindID({unit_index})
 if u then print("POS|" .. u:GetX() .. "|" .. u:GetY()) else print("POS|GONE") end
-{diag_block}print("{SENTINEL}")
+{diag_block}{_LUA_SNAPSHOT}print("{SENTINEL}")
 """
 
 

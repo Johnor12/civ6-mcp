@@ -110,3 +110,34 @@ def test_save_failure_still_counts_as_ended():
     res = _run(end_turn.execute_hotseat_end_turn(GameState(conn), "LEADER_POUNDMAKER"))
     assert res.ended and res.save_name == ""
     assert "save FAILED" in res.text and "Save Game button" in res.text
+
+
+def test_interrupted_end_turn_retakes_the_seat_and_reports():
+    """The engine handed the turn back (automated scout found a natural wonder)."""
+    conn = _Conn()
+    calls = {"n": 0}
+
+    def status():
+        calls["n"] += 1
+        if calls["n"] <= 2:  # seat check, pre-check
+            return [_hs()]
+        if calls["n"] == 3:  # turn ended, please wait
+            return [_hs(active=False)]
+        return [_hs(controls=True)]  # Start Turn again for Poundmaker
+
+    conn.on("HS|", status)
+    _quiet_turn(conn)
+    conn.on("ACTION_ENDTURN", ["SENT|2"])
+    conn.on("ACCEPTED", ["ACCEPTED"])
+    conn.on("NOTIF|", ["NOTIF|NOTIFICATION_DISCOVER_NATURAL_WONDER|Natural Wonder Discovered|63|29,6"])
+    res = _run(end_turn.execute_hotseat_end_turn(GameState(conn), "LEADER_POUNDMAKER"))
+    assert not res.ended
+    assert res.text.startswith("Turn NOT ended") and "interrupted" in res.text
+    assert "call end_turn again" in res.text
+    assert "Natural Wonder Discovered" in res.text
+    # The screen was dismissed again, after End Turn, and nothing was saved.
+    codes = conn.sent
+    end = next(i for i, c in enumerate(codes) if "ACTION_ENDTURN" in c)
+    accept = [i for i, c in enumerate(codes) if "PlayerChange_Close" in c]
+    assert accept and accept[-1] > end
+    assert not any("Network.SaveGame" in c for c in codes)

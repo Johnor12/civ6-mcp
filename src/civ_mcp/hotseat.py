@@ -387,6 +387,42 @@ _BLOCKER_LUA = (
     f'print("{SENTINEL}")'
 )
 
+# The engine's "nothing is blocking" values. The enum key for the none
+# value is NO_ENDTURN_BLOCKING in this build; keep the older spellings too.
+_NO_BLOCKER = {"NONE", "?", "NO_ENDTURN_BLOCKING", "ENDTURN_BLOCKING_TYPE_NONE"}
+
+# Seconds after End Turn before the engine is asked for a blocker (and End
+# Turn pressed once more), and before giving up when it reports none.
+BLOCKER_CHECK_AFTER = 12.0
+GIVE_UP_AFTER = 45.0
+
+
+async def first_blocker(conn: BridgeConnection) -> str | None:
+    """Name of the engine's first end-turn blocker, or None when nothing blocks."""
+    try:
+        lines = await conn.execute_in_context(CONTEXT_INGAME, _BLOCKER_LUA, 6.0)
+    except Exception:
+        return None
+    name = next((l.split("|", 1)[1] for l in lines if l.startswith("BLOCK|")), "?")
+    if name in _NO_BLOCKER or name.endswith("_NONE"):
+        return None
+    return name
+
+
+class TurnInterrupted(RuntimeError):
+    """The engine ended the turn and handed it straight back to the same player.
+
+    Happens when something that needs the player's attention occurs while
+    the end of turn is processed (an automated scout walks into a tribal
+    village, reveals a natural wonder or meets another civilization, a unit
+    is attacked): in hotseat the turn-change screen comes up again for the
+    same player, like a fresh turn.
+    """
+
+    def __init__(self, status: HotseatStatus):
+        super().__init__("the end of turn was interrupted")
+        self.status = status
+
 
 async def end_turn_and_wait(
     conn: BridgeConnection, prev_player: int, prev_turn: int, timeout: float = 240.0
@@ -397,9 +433,22 @@ async def end_turn_and_wait(
     after the last one, runs the AI civilizations and city-states and starts
     the next turn with the first human). Either way the PlayerChange screen
     comes up for that player.
+
+    Raises TurnInterrupted when the same player's PlayerChange screen comes
+    back instead (see there), and RuntimeError with the engine's blocker
+    name, or a timeout, when the seat does not move at all.
     """
+    # ACTION_ENDTURN only counts while the game is unpaused with the
+    # turn-change screen down; make sure of it before pressing End Turn.
+    try:
+        pre = await ingame_status(conn)
+    except Exception:
+        pre = HotseatStatus(screen="none")
+    if pre.screen == "ingame" and pre.player_change_visible:
+        await accept_turn(conn)
     await conn.execute_in_context(CONTEXT_INGAME, _END_TURN_LUA, 8.0)
-    deadline = time.monotonic() + timeout
+    start = time.monotonic()
+    deadline = start + timeout
     checked_blocker = False
     st = HotseatStatus(screen="none")
     while time.monotonic() < deadline:
@@ -413,18 +462,29 @@ async def end_turn_and_wait(
         changed = st.local_player != prev_player or st.turn != prev_turn
         if changed and st.turn_controls_visible:
             return st
-        if not changed and not checked_blocker and time.monotonic() > deadline - timeout + 12:
+        if changed or not st.turn_active:
+            continue  # hand-off or end-of-turn processing in progress
+        # Still this player's turn, and it is active.
+        if st.turn_controls_visible:
+            raise TurnInterrupted(st)
+        elapsed = time.monotonic() - start
+        if not checked_blocker and elapsed > BLOCKER_CHECK_AFTER:
             checked_blocker = True
-            try:
-                lines = await conn.execute_in_context(CONTEXT_INGAME, _BLOCKER_LUA, 6.0)
-            except Exception:
-                lines = []
-            blocker = next((l.split("|", 1)[1] for l in lines if l.startswith("BLOCK|")), "?")
-            if blocker not in ("NONE", "ENDTURN_BLOCKING_TYPE_NONE", "?"):
+            blocker = await first_blocker(conn)
+            if blocker is not None:
                 raise RuntimeError(
                     f"The game refused to end the turn: blocker {blocker}. "
                     "Resolve it (units, production, research, ...) and call end_turn again."
                 )
+            # Nothing blocks and the seat did not move: the request was
+            # probably swallowed by a popup. Press End Turn once more.
+            await conn.execute_in_context(CONTEXT_INGAME, _END_TURN_LUA, 8.0)
+        elif checked_blocker and elapsed > GIVE_UP_AFTER:
+            raise RuntimeError(
+                "The game did not end the turn and reports no blocker. "
+                f"Last seen: {st.describe()} A popup with its own close button "
+                "may be waiting: press ESC in the game, then call end_turn again."
+            )
     raise RuntimeError(
         "Timed out waiting for the next player's turn-change screen after End Turn. "
         f"Last seen: {st.describe()}"

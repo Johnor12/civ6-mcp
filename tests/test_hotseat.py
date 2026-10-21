@@ -129,13 +129,72 @@ class TestEndTurn:
         st = _run(hotseat.end_turn_and_wait(conn, 2, 63, timeout=20))
         assert st.turn == 64
 
-    def test_reports_engine_blocker(self):
+    def test_reports_engine_blocker(self, monkeypatch):
+        monkeypatch.setattr(hotseat, "BLOCKER_CHECK_AFTER", 1.0)
         conn = _FakeBridge()
         conn.replies.append(("SENT|", ["SENT|2"]))
-        conn.replies.append(("HS|", [_hs_line()]))
+        # Mid-turn: the turn-change screen is down and the seat never moves.
+        conn.replies.append(("HS|", [_hs_line(pc_visible=False, controls=False, paused=False)]))
         conn.replies.append(("BLOCK|", ["BLOCK|ENDTURN_BLOCKING_TYPE_PRODUCTION"]))
         with pytest.raises(RuntimeError, match="PRODUCTION"):
-            _run(hotseat.end_turn_and_wait(conn, 2, 63, timeout=14))
+            _run(hotseat.end_turn_and_wait(conn, 2, 63, timeout=6))
+
+    def test_no_endturn_blocking_is_not_a_blocker(self, monkeypatch):
+        """NO_ENDTURN_BLOCKING is the engine's 'nothing blocks' value: press
+        End Turn again, then give up with a popup hint, never 'blocker NO_...'."""
+        monkeypatch.setattr(hotseat, "BLOCKER_CHECK_AFTER", 1.0)
+        monkeypatch.setattr(hotseat, "GIVE_UP_AFTER", 2.5)
+        conn = _FakeBridge()
+        conn.replies.append(("SENT|", ["SENT|2"]))
+        conn.replies.append(("HS|", [_hs_line(pc_visible=False, controls=False, paused=False)]))
+        conn.replies.append(("BLOCK|", ["BLOCK|NO_ENDTURN_BLOCKING"]))
+        with pytest.raises(RuntimeError, match="reports no blocker") as ei:
+            _run(hotseat.end_turn_and_wait(conn, 2, 63, timeout=8))
+        assert "NO_ENDTURN_BLOCKING" not in str(ei.value)
+        assert sum("ACTION_ENDTURN" in code for _, code in conn.sent) == 2
+
+    def test_same_player_screen_returning_is_an_interruption(self):
+        """An automated scout found a natural wonder while the turn ended:
+        the engine handed the turn straight back and re-showed Start Turn."""
+        conn = _FakeBridge()
+        calls = {"n": 0}
+
+        def status_lines():
+            calls["n"] += 1
+            if calls["n"] == 1:  # the pre-check: mid-turn, screen down
+                return [_hs_line(pc_visible=False, controls=False, paused=False)]
+            if calls["n"] == 2:  # turn ended, 'please wait'
+                return [_hs_line(active=False, controls=False, paused=False)]
+            if calls["n"] == 3:  # active again, controls not built yet
+                return [_hs_line(controls=False, paused=False)]
+            return [_hs_line()]  # Start Turn screen for the same player
+
+        conn.replies.append(("SENT|", ["SENT|2"]))
+        conn.replies.append(("HS|", status_lines))
+        with pytest.raises(hotseat.TurnInterrupted) as ei:
+            _run(hotseat.end_turn_and_wait(conn, 2, 63, timeout=20))
+        assert ei.value.status.leader == "LEADER_POUNDMAKER"
+        assert not any("BLOCK|" in code for _, code in conn.sent)
+
+    def test_accepts_a_visible_screen_before_pressing_end_turn(self):
+        conn = _FakeBridge()
+        calls = {"n": 0}
+
+        def status_lines():
+            calls["n"] += 1
+            if calls["n"] <= 2:  # pre-check and accept_turn's report: screen up
+                return [_hs_line()]
+            return [_hs_line(slot=3, leader="LEADER_BARBAROSSA", name="Aidan")]
+
+        conn.replies.append(("SENT|", ["SENT|2"]))
+        conn.replies.append(("ACCEPTED", ["ACCEPTED"]))
+        conn.replies.append(("HS|", status_lines))
+        st = _run(hotseat.end_turn_and_wait(conn, 2, 63, timeout=20))
+        assert st.leader == "LEADER_BARBAROSSA"
+        codes = [code for _, code in conn.sent]
+        accept = next(i for i, c in enumerate(codes) if "PlayerChange_Close" in c)
+        end = next(i for i, c in enumerate(codes) if "ACTION_ENDTURN" in c)
+        assert accept < end
 
     def test_save_name_and_save(self):
         conn = _FakeBridge()

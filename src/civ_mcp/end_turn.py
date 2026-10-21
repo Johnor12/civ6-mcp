@@ -645,6 +645,28 @@ async def _standin_preflight(gs: GameState, turn: int | None) -> str | None:
 
 
 
+async def _interrupted_text(gs: GameState, st: hotseat.HotseatStatus) -> str:
+    """Take the seat back after an interrupted end of turn and say what is new."""
+    try:
+        await hotseat.accept_turn(gs.conn)
+    except Exception:
+        log.debug("Re-accepting the turn after an interruption failed", exc_info=True)
+    try:
+        notes = nr.narrate_notifications(await gs.get_notifications())
+    except Exception as e:  # noqa: BLE001 - the report must still come out
+        notes = f"(notifications unavailable: {e})"
+    return (
+        f"Turn NOT ended — the game interrupted the end of turn and handed it back "
+        f"to {st.leader_display}: something that needs this player's attention "
+        "happened while automated units moved (a tribal village, a natural wonder, "
+        "a first contact or an attack). The turn-change screen came up again and "
+        "was dismissed; it is still this player's turn. Check the notifications "
+        "below (a natural-wonder or first-meet popup needs ESC in the game), give "
+        "any new orders, then call end_turn again; the diary entry is kept.\n\n"
+        + notes
+    )
+
+
 @dataclass
 class EndTurnResult:
     text: str
@@ -683,6 +705,8 @@ async def execute_hotseat_end_turn(gs: GameState, leader: str) -> EndTurnResult:
 
     try:
         nxt = await hotseat.end_turn_and_wait(conn, st.local_player, st.turn)
+    except hotseat.TurnInterrupted:
+        return EndTurnResult(await _interrupted_text(gs, st))
     except RuntimeError as e:
         return EndTurnResult(f"Turn NOT ended — {e}")
     save_name = await hotseat.suggest_save_name(conn)

@@ -332,3 +332,37 @@ class TestParseEndTurnBlocking:
 
     def test_empty_lines(self):
         assert parse_end_turn_blocking([]) == []
+
+
+from civ_mcp.lua.units import describe_move_changes, parse_unit_snapshot
+
+
+def test_unit_snapshot_parses_gold_faith_and_roster():
+    snap = parse_unit_snapshot(
+        ["OK:MOVING_TO|9,31|from:10,30", "SNAP|30|0|196608:UNIT_SCOUT@7,24;131073:UNIT_WARRIOR@9,31"]
+    )
+    assert snap == (30, 0, {196608: "UNIT_SCOUT@7,24", 131073: "UNIT_WARRIOR@9,31"})
+    assert parse_unit_snapshot(["POS|9|31"]) is None
+    assert parse_unit_snapshot(["SNAP|30|0|"]) == (30, 0, {})
+
+
+def test_move_changes_report_a_village_and_its_builder():
+    pre = (30, 0, {131073: "UNIT_WARRIOR@10,30"})
+    post = (30, 0, {131073: "UNIT_WARRIOR@9,31", 262146: "UNIT_BUILDER@8,26"})
+    text = describe_move_changes(pre, post, village_taken=True)
+    assert text == "TRIBAL_VILLAGE taken|new units: UNIT_BUILDER (id 262146) at 8,26"
+
+
+def test_move_changes_report_gold_and_an_invisible_reward():
+    pre = (30, 0, {1: "UNIT_WARRIOR@1,1"})
+    assert describe_move_changes(pre, (70, 0, pre[2]), True) == "TRIBAL_VILLAGE taken|gold +40"
+    text = describe_move_changes(pre, pre, True)
+    assert text.startswith("TRIBAL_VILLAGE taken|reward was not gold, faith or a unit")
+    assert describe_move_changes(pre, pre, False) == ""
+    assert describe_move_changes(None, pre, False) == ""
+
+
+def test_move_changes_report_lost_units():
+    pre = (30, 5, {1: "UNIT_WARRIOR@1,1", 2: "UNIT_SETTLER@1,2"})
+    post = (30, 5, {1: "UNIT_WARRIOR@1,2"})
+    assert describe_move_changes(pre, post, False) == "units lost: UNIT_SETTLER"
