@@ -202,7 +202,7 @@ Military Engineers (requires Encampment + Armory): `build_route` builds a railro
 
 ## Diplomacy
 
-**Reactive (AI-initiated):** AI encounters block turn progression. Use `get_pending_diplomacy` to check for open sessions, then `respond_to_diplomacy` (POSITIVE/NEGATIVE, 2-3 rounds). Diplomacy sessions do not affect unit movement or orders — continue commanding units normally afterward.
+**Reactive (AI-initiated):** AI encounters block turn progression. Use `get_pending_diplomacy` to check for open sessions, then `respond_to_diplomacy` (POSITIVE/NEGATIVE/EXIT, 2-3 rounds). Diplomacy sessions do not affect unit movement or orders — continue commanding units normally afterward.
 
 **Proactive:**
 - `send_diplomatic_action(action="DIPLOMATIC_DELEGATION")` — 25g, worth sending on first meeting

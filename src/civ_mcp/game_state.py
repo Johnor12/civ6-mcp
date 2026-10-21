@@ -206,7 +206,9 @@ class GameState:
         return lq.parse_diplomacy_response(lines)
 
     async def get_tech_civics(self) -> lq.TechCivicStatus:
-        lines = await self.conn.execute_read(lq.build_tech_civics_query())
+        # InGame on purpose: GetTurnsToProgressCivic / GetCulturalProgress exist
+        # only there, so civic turns and progress are exact instead of estimated.
+        lines = await self.conn.execute_write(lq.build_tech_civics_query())
         return lq.parse_tech_civics_response(lines)
 
     async def get_empire_resources(
@@ -448,8 +450,9 @@ class GameState:
             # Verify city was actually created (RequestOperation is async)
             verify_lua = lq.build_verify_city_at(x, y)
             verify_lines = await self.conn.execute_read(verify_lua)
-            verified = lq.parse_verify_city_at(verify_lines)
-            if not verified:
+            # City IDs can be 0, so test `is None` rather than truthiness.
+            city_id = lq.parse_verify_city_at(verify_lines)
+            if city_id is None:
                 # Retry once — popup may have blocked the async operation
                 try:
                     await self.dismiss_popup()
@@ -457,18 +460,20 @@ class GameState:
                     retry_result = _action_result(lines)
                     if retry_result.startswith("FOUNDED|"):
                         verify_lines = await self.conn.execute_read(verify_lua)
-                        if lq.parse_verify_city_at(verify_lines):
+                        city_id = lq.parse_verify_city_at(verify_lines)
+                        if city_id is not None:
                             result = retry_result
-                            verified = True
                 except Exception:
                     log.debug(
                         "found_city retry after popup dismiss failed", exc_info=True
                     )
-                if not verified:
+                if city_id is None:
                     result = (
                         f"Error: FOUND_FAILED|Founding at {x},{y} was requested but "
                         "city did not appear despite popup dismissal."
                     )
+            if city_id is not None and city_id >= 0:
+                result += f"|city_id:{city_id}"
 
         # On settle failure, run the settle advisor to suggest alternatives
         if result.startswith("Error: CANNOT_FOUND") or result.startswith(
@@ -757,8 +762,107 @@ class GameState:
         lines = await self.conn.execute_write(lua)
         return lq.parse_diplomacy_sessions(lines)
 
+    # Leader dialogues hold an engine event (DiplomacyActionView.InitializeView
+    # -> UI.ReferenceCurrentEvent) until the view uninitializes. Closing the
+    # session underneath the view (DiplomacyManager.CloseSession while it is
+    # still presenting the next statement) leaves that hold in place: units
+    # keep 0 moves, the end-turn button reads PLEASE WAIT and end turn is
+    # ignored. So leave conversations the way the Goodbye button does, and
+    # give the engine time to deliver the leader's reply.
+    RESPONSE_SETTLE_S = 0.5
+    RESPONSE_SETTLE_ROUNDS = 8  # ~4 s for the reply statement to arrive
+
+    def _diplomacy_view_state(self) -> int | None:
+        """Lua state index of DiplomacyActionView, or None if unknown."""
+        for idx, name in (getattr(self.conn, "lua_states", None) or {}).items():
+            if name == "DiplomacyActionView":
+                return idx
+        return None
+
+    async def _exit_diplomacy_via_view(self) -> str:
+        """Press the view's own exit choice (CHOICE_EXIT -> ExitConversationMode).
+
+        Returns VIEW_EXIT, VIEW_HIDDEN, NO_VIEW or VIEW_EXIT_FAILED|<err>.
+        """
+        idx = self._diplomacy_view_state()
+        if idx is None:
+            return "NO_VIEW"
+        lua = (
+            'if ContextPtr:IsHidden() then print("VIEW_HIDDEN") else '
+            'local ok, err = pcall(OnSelectConversationDiplomacyStatement, "CHOICE_EXIT") '
+            'if ok then print("VIEW_EXIT") else print("VIEW_EXIT_FAILED|" .. tostring(err)) end end '
+            f'print("{lq.SENTINEL}")'
+        )
+        try:
+            lines = await self.conn.execute_in_state(idx, lua)
+        except Exception as e:  # noqa: BLE001 — caller falls back to CloseSession
+            return f"VIEW_EXIT_FAILED|{type(e).__name__}: {e}"
+        for line in lines:
+            if line.startswith("VIEW_"):
+                return line.strip()
+        return "VIEW_EXIT_FAILED|no output"
+
+    async def _release_orphaned_diplomacy_view(self) -> bool:
+        """After a session is gone, make sure the view let go of the engine.
+
+        Runs DiplomacyActionView.UninitializeView() when the view is still
+        visible with no open session behind it. Returns True if it ran.
+        """
+        idx = self._diplomacy_view_state()
+        if idx is None:
+            return False
+        lua = (
+            'if ContextPtr:IsHidden() then print("VIEW_HIDDEN") else '
+            'local ok = pcall(UninitializeView) print(ok and "VIEW_RELEASED" or "VIEW_RELEASE_FAILED") end '
+            f'print("{lq.SENTINEL}")'
+        )
+        try:
+            lines = await self.conn.execute_in_state(idx, lua)
+        except Exception:  # noqa: BLE001 — best effort
+            return False
+        released = any("VIEW_RELEASED" in l for l in lines)
+        if released:
+            log.info(
+                "Diplomacy view was still up after its session closed — released it"
+            )
+        return released
+
+    async def _session_open(self, other_player_id: int) -> bool:
+        lines = await self.conn.execute_write(
+            lq.build_check_diplomacy_session_state(other_player_id)
+        )
+        return any("SESSION_OPEN" in l for l in lines)
+
+    async def _leave_session(self, other_player_id: int) -> str:
+        """Close a session the UI way; raw CloseSession only if that fails."""
+        via_view = await self._exit_diplomacy_via_view()
+        if via_view == "VIEW_EXIT":
+            await asyncio.sleep(self.RESPONSE_SETTLE_S)
+            if not await self._session_open(other_player_id):
+                await asyncio.sleep(self.RESPONSE_SETTLE_S)
+                await self._release_orphaned_diplomacy_view()
+                return "SESSION_CLOSED (left via leader screen)"
+        log.info(
+            "View exit did not close the session (%s) — closing it directly", via_view
+        )
+        close_lua = lq.build_diplomacy_respond(other_player_id, "EXIT")
+        lines = await self.conn.execute_write(close_lua)
+        result = _action_result(lines)
+        await asyncio.sleep(self.RESPONSE_SETTLE_S)
+        await self._release_orphaned_diplomacy_view()
+        return (
+            result if result.startswith("Error") else "SESSION_CLOSED (closed directly)"
+        )
+
     async def diplomacy_respond(self, other_player_id: int, response: str) -> str:
-        # Capture dialogue text BEFORE response to detect goodbye phase
+        response = response.upper()
+        if response == "EXIT":
+            if not await self._session_open(other_player_id):
+                await self._release_orphaned_diplomacy_view()
+                return "Error: ERR:NO_SESSION"
+            return f"OK:RESPONDED|EXIT|{await self._leave_session(other_player_id)}"
+
+        # Capture dialogue text BEFORE the response to detect the goodbye phase
         pre_sessions = await self.get_diplomacy_sessions()
         pre_text = ""
         for s in pre_sessions:
@@ -766,58 +870,47 @@ class GameState:
                 pre_text = s.dialogue_text
                 break
 
-        # Phase 1: Send AddResponse only (no CloseSession — engine handles lifecycle)
-        lua = lq.build_diplomacy_respond(other_player_id, response.upper())
+        # Phase 1: AddResponse only — the same call the leader-screen button
+        # makes; the engine handles the session lifecycle.
+        lua = lq.build_diplomacy_respond(other_player_id, response)
         lines = await self.conn.execute_write(lua)
         result = _action_result(lines)
-
-        # EXIT and error paths return immediately
-        if "SESSION_CLOSED" in result or result.startswith("Error"):
+        if result.startswith("Error"):
             return result
 
-        # Phase 2: Give engine ~9 frames (0.3s at 30fps) to process the
-        # response and transition/close the session, then check state in
-        # a separate TCP round-trip (same-frame checks see stale state).
-        await asyncio.sleep(0.3)
-        check_lines = await self.conn.execute_write(
-            lq.build_check_diplomacy_session_state(other_player_id)
-        )
-        if not any("SESSION_OPEN" in l for l in check_lines):
-            return f"OK:RESPONDED|{response.upper()}|SESSION_CLOSED"
-
-        # Phase 3: Session still open — check if dialogue text changed.
-        # If unchanged, we're in the goodbye phase. Auto-close.
-        post_sessions = await self.get_diplomacy_sessions()
-        post_text = ""
-        for s in post_sessions:
-            if s.other_player_id == other_player_id:
-                post_text = s.dialogue_text
+        # Phase 2: wait for the engine to either close the session or deliver
+        # the leader's next statement. A fixed 0.3 s was too short: the view
+        # was still animating and a forced close froze the game.
+        post_text = pre_text
+        post_reason = ""
+        for _ in range(self.RESPONSE_SETTLE_ROUNDS):
+            await asyncio.sleep(self.RESPONSE_SETTLE_S)
+            if not await self._session_open(other_player_id):
+                await asyncio.sleep(self.RESPONSE_SETTLE_S)
+                await self._release_orphaned_diplomacy_view()
+                return f"OK:RESPONDED|{response}|SESSION_CLOSED"
+            for s in await self.get_diplomacy_sessions():
+                if s.other_player_id == other_player_id:
+                    post_text, post_reason = s.dialogue_text, s.reason_text
+                    break
+            if post_text and post_text != pre_text:
                 break
 
-        if not post_sessions:
-            # Session disappeared between checks (race condition)
-            return f"OK:RESPONDED|{response.upper()}|SESSION_CLOSED"
-
-        if post_text == pre_text:
-            # Dialogue unchanged → goodbye phase. Force close.
+        if not post_text or post_text == pre_text:
+            # Nothing new to say: the leader is waiting for us to leave.
             log.info(
-                "Goodbye phase detected (text unchanged) for player %d — auto-closing",
+                "Goodbye phase (no new statement) for player %d — leaving via the view",
                 other_player_id,
             )
-            close_lua = lq.build_diplomacy_respond(other_player_id, "EXIT")
-            await self.conn.execute_write(close_lua)
-            return f"OK:RESPONDED|{response.upper()}|SESSION_CLOSED (auto-closed goodbye phase)"
+            return (
+                f"OK:RESPONDED|{response}|{await self._leave_session(other_player_id)}"
+            )
 
         # Include the new dialogue text so the agent can see what the leader said
-        post_reason = ""
-        for s in post_sessions:
-            if s.other_player_id == other_player_id:
-                post_reason = s.reason_text
-                break
         dialogue_note = f'\nLeader says: "{post_text}"'
         if post_reason:
             dialogue_note += f'\nReason/agenda: "{post_reason}"'
-        return f"OK:RESPONDED|{response.upper()}|SESSION_CONTINUES{dialogue_note}"
+        return f"OK:RESPONDED|{response}|SESSION_CONTINUES{dialogue_note}"
 
     async def send_diplomatic_action(self, other_player_id: int, action: str) -> str:
         if action.upper() == "OPEN_BORDERS":

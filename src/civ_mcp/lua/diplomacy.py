@@ -25,7 +25,7 @@ local me = Game.GetLocalPlayer()
 local pDiplo = Players[me]:GetDiplomacy()
 local pVis = PlayersVisibility[me]
 local states = {"ALLIED","DECLARED_FRIEND","FRIENDLY","NEUTRAL","UNFRIENDLY","DENOUNCED","WAR"}
-local checkActions = {"DIPLOACTION_DIPLOMATIC_DELEGATION","DIPLOACTION_DECLARE_FRIENDSHIP","DIPLOACTION_DENOUNCE","DIPLOACTION_RESIDENT_EMBASSY","DIPLOACTION_OPEN_BORDERS","DIPLOACTION_MAKE_ALLIANCE"}
+local checkActions = {"DIPLOACTION_DIPLOMATIC_DELEGATION","DIPLOACTION_DECLARE_FRIENDSHIP","DIPLOACTION_DENOUNCE","DIPLOACTION_RESIDENT_EMBASSY","DIPLOACTION_OPEN_BORDERS","DIPLOACTION_ALLIANCE"}
 for i = 0, 62 do
     if i ~= me and Players[i] and Players[i]:IsAlive() and Players[i]:IsMajor() then
         local cfg = PlayerConfigurations[i]
@@ -37,7 +37,8 @@ for i = 0, 62 do
             local ai = Players[i]:GetDiplomaticAI()
             local stateIdx = ai:GetDiplomaticStateIndex(me)
             local stateName = states[stateIdx + 1] or tostring(stateIdx)
-            local grievances = pDiplo:GetGrievancesAgainst(i)
+            local grievances = 0
+            do local okG, g = pcall(function() return pDiplo:GetGrievancesAgainst(i) end) if okG and g then grievances = g end end
             local vis = pDiplo:GetVisibilityOn(i)
             local hasDel = pDiplo:HasDelegationAt(i) and "1" or "0"
             local hasEmb = pDiplo:HasEmbassyAt(i) and "1" or "0"
@@ -55,8 +56,8 @@ for i = 0, 62 do
                     local ecName = Locale.Lookup(ec:GetName())
                     local ecPop = ec:GetPopulation()
                     local ecLoy, ecLoyPT = 100, 0
-                    local ecCult = ec:GetCulturalIdentity()
-                    if ecCult then ecLoy = ecCult:GetLoyalty(); ecLoyPT = ecCult:GetLoyaltyPerTurn() end
+                    -- loyalty is a Rise & Fall API: absent in the base ruleset
+                    pcall(function() local ecCult = ec:GetCulturalIdentity(); if ecCult then ecLoy = ecCult:GetLoyalty(); ecLoyPT = ecCult:GetLoyaltyPerTurn() end end)
                     local ecWalls, ecDef = 0, 0
                     pcall(function()
                         for _, d in ec:GetDistricts():Members() do
@@ -94,6 +95,7 @@ for i = 0, 62 do
                 if ok2 and valid then
                     local label = aName:gsub("DIPLOACTION_", "")
                     if label == "OPEN_BORDERS" then label = "Open Borders (via propose_trade)" end
+                    if label == "ALLIANCE" then label = "ALLIANCE (via form_alliance)" end
                     table.insert(avail, label)
                 end
             end
@@ -670,7 +672,15 @@ for i = 0, 62 do
                         elseif subType == DealAgreementTypes.ALLIANCE then
                             local aNames = {"Research","Cultural","Economic","Military","Religious"}
                             itemName = (valueType >= 0 and valueType < 5 and aNames[valueType+1] or "Unknown") .. " Alliance"
-                        else itemName = "" end
+                        else
+                            -- Name other agreements (e.g. a peace treaty) instead of dropping them
+                            itemName = "Agreement"
+                            pcall(function()
+                                for k, v in pairs(DealAgreementTypes) do
+                                    if v == subType then itemName = "Agreement: " .. k; break end
+                                end
+                            end)
+                        end
                     elseif iType == DealItemTypes.FAVOR then
                         typeName = "FAVOR"
                         itemName = "Diplomatic Favor"

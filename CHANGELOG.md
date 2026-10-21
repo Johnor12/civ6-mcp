@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Fork sweep (fixes ported from the rossklin and nace-ai forks)
+
+- **Leader-dialogue freeze fix**: `respond_to_diplomacy` waits up to ~4 s for the leader's reply instead of force-closing after 0.3 s, and leaves goodbye-phase conversations through the view's own exit (CHOICE_EXIT) rather than `DiplomacyManager.CloseSession`. A forced close while the view was still presenting left `UI.ReferenceCurrentEvent` held: units at 0 moves, end-turn button stuck on PLEASE WAIT. `EXIT` is now an accepted response.
+- **Popup dismissal releases engine events**: `dismiss_popup` closes the tutorial `AdvisorPopup` via its own `Close()` and an orphaned leader scene via `DiplomacyActionView.UninitializeView()` in their own Lua states; `SetHide` on either left the same engine hold in place. The PopupWatcher now also detects the advisor popup.
+- **PopupWatcher never interleaves with end_turn**: new `conn.end_turn_lock`, held for the whole `execute_end_turn`; the watcher takes it (0.5 s timeout) before any dismissal.
+- **Base-game / GameCore compatibility**: `GetFavor`, `Game.GetEras`, `GetCulturalIdentity`, `GetGrievancesAgainst` and the `UnitManager` line-of-sight probe are pcall-guarded (absent without Rise & Fall / Gathering Storm, or in the GameCore Lua state); production readback no longer raises on `GetTurnsLeft`.
+- **set_policies slot moves**: a card active in another slot can be moved when that slot is also in the batch; the engine's `CanSlotPolicy` rejects every active card, which previously refused all swaps.
+- **Diplomacy action list**: `DIPLOACTION_MAKE_ALLIANCE` does not exist; checks `DIPLOACTION_ALLIANCE` so alliances show up in `get_diplomacy`'s "Can:" list.
+- **Free Cities**: player 62 no longer appears in `get_city_states`; its units are attackable like barbarians.
+- **Attack**: removed the incorrect "entered ZOC this turn" refusal (ZOC stops movement, not attacks).
+- **Pending deals**: peace treaties and other agreement items are named instead of blank.
+- **Smaller**: `found_city` reports the new `city_id`; foreign units on map tiles show HP; per-civic turn estimates subtract banked progress; builder tasks note that indirect tech prerequisites are not checked.
+
 The focus shifted from running games to packaging the results. The dataset publisher pipeline exports all telemetry to HuggingFace with Croissant 1.1 metadata for the NeurIPS Evaluations & Datasets track submission. Several reliability features landed in parallel from ongoing eval runs across the fleet.
 
 - **HuggingFace dataset publisher**: End-to-end pipeline (`scripts/publish_hf/`) for staging, exporting parquet tables, generating Croissant 1.1 metadata, validating, and uploading to HuggingFace.

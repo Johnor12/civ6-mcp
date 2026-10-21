@@ -286,6 +286,13 @@ def narrate_builder_tasks(
             )
 
     lines.append("")
+    lines.append(
+        "NOTE: Tasks are suggested from terrain/resources and do NOT check every "
+        "indirect tech prerequisite. A Mine on a jungle hill needs Bronze Working "
+        "(to clear the jungle) plus Mining; harvesting before improving may need its "
+        "own tech. Verify tech requirements before committing builder charges."
+    )
+    lines.append("")
     _append_builder_list(lines, builders)
     return "\n".join(lines)
 

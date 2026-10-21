@@ -216,7 +216,8 @@ for dy = -r, r do
                                             local oCfg = PlayerConfigurations[i]
                                             label = Locale.Lookup(oCfg:GetCivilizationShortDescription())
                                         end
-                                        table.insert(uParts, label .. " " .. ut:gsub("UNIT_", ""))
+                                        local uHp = u:GetMaxDamage() - u:GetDamage()
+                                        table.insert(uParts, label .. " " .. ut:gsub("UNIT_", "") .. " (" .. uHp .. "/" .. u:GetMaxDamage() .. "hp)")
                                     end
                                 end
                             end
@@ -407,7 +408,9 @@ def build_verify_city_at(x: int, y: int) -> str:
     return f"""
 local plot = Map.GetPlot({x}, {y})
 if plot and plot:IsCity() then
-    print("OK:CITY_EXISTS")
+    local cid = -1
+    pcall(function() local c = Cities.GetCityInPlot({x}, {y}); if c then cid = c:GetID() end end)
+    print("OK:CITY_EXISTS|" .. cid)
 else
     print("OK:NO_CITY")
 end
@@ -415,12 +418,20 @@ print("{SENTINEL}")
 """
 
 
-def parse_verify_city_at(lines: list[str]) -> bool:
-    """Return True if a city was found at the coordinates."""
+def parse_verify_city_at(lines: list[str]) -> int | None:
+    """Return the ID of the city at the coordinates, or None if there is no city.
+
+    City IDs can be 0, so callers must test ``is None`` rather than
+    truthiness. -1 means a city exists but its ID could not be read.
+    """
     for line in lines:
         if "CITY_EXISTS" in line:
-            return True
-    return False
+            parts = line.strip().split("|")
+            try:
+                return int(parts[1]) if len(parts) > 1 else -1
+            except ValueError:
+                return -1
+    return None
 
 
 def build_settle_advisor_query(unit_index: int) -> str:

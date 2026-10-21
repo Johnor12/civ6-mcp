@@ -32,6 +32,11 @@ class GameConnection:
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
         self._lock = asyncio.Lock()
+        # Held by execute_end_turn for the whole turn advance. The background
+        # PopupWatcher takes it before dismissing anything, so a dismissal can
+        # never interleave with turn processing (InGame writes during AI
+        # processing have stalled the AI and swallowed the end-turn request).
+        self.end_turn_lock = asyncio.Lock()
         self.lua_states: dict[int, str] = {}  # index -> name
         self.gamecore_index: int | None = None
         self.ingame_index: int | None = None

@@ -1440,7 +1440,8 @@ async def respond_to_diplomacy(
 
     Args:
         other_player_id: The player ID of the other civilization (from get_pending_diplomacy)
-        response: "POSITIVE" (friendly) or "NEGATIVE" (dismissive)
+        response: "POSITIVE" (friendly), "NEGATIVE" (dismissive), or "EXIT" to
+            leave the conversation (closes it the way the Goodbye button does)
 
     First meetings typically have 2-3 rounds. The tool automatically detects
     and closes goodbye-phase sessions (where dialogue text stops changing).

@@ -53,7 +53,17 @@ _NONCRITICAL_POPUPS = [
     "RockBandPopup",
     "RockBandMoviePopup",
     "NaturalDisasterPopup",
+    # the tutorial advisor ("OK" dialog a human clicks away); its root may be a
+    # child of InGame or a top-level context, so both paths are checked
+    "TutorialUIRoot/AdvisorPopup",
+    "/TutorialUIRoot/AdvisorPopup",
 ]
+
+
+def _ctx_path(name: str) -> str:
+    """Context path for a popup name: absolute names are used verbatim."""
+    return name if name.startswith("/") else f"/InGame/{name}"
+
 
 # Critical screens — pause both camera and popup watcher while visible.
 _CRITICAL_SCREENS = [
@@ -71,7 +81,7 @@ _POPUP_POLL_LUA = (
     )
     + "if r=='CLEAR' then "
     + "".join(
-        f"do local c=ContextPtr:LookUpControl('/InGame/{n}') "
+        f"do local c=ContextPtr:LookUpControl('{_ctx_path(n)}') "
         f"if c and not c:IsHidden() then r='POPUP' end end "
         for n in _NONCRITICAL_POPUPS
     )
@@ -209,6 +219,31 @@ class PopupWatcher:
         if dismissed:
             log.warning("PopupWatcher: dismissed crash dialog: %s", dismissed)
 
+    async def _dismiss_outside_end_turn(self, dismiss_popup) -> bool:
+        """Run a dismissal under the connection's end-turn lock.
+
+        Returns False (and dismisses nothing) when end_turn holds the lock.
+        A bare ``locked()`` check would race: the watcher can pass it just
+        before end_turn acquires the lock, then queue behind end_turn's
+        queries and land its dismissal in the middle of turn processing.
+        Holding the lock for the whole (bounded, seconds) dismissal makes an
+        incoming end_turn wait it out instead.
+        """
+        lock = getattr(self._conn, "end_turn_lock", None)
+        if lock is None:
+            await dismiss_popup(self._conn)
+            return True
+        try:
+            await asyncio.wait_for(lock.acquire(), timeout=0.5)
+        except asyncio.TimeoutError:
+            log.debug("PopupWatcher: end_turn in progress — dismissal deferred")
+            return False
+        try:
+            await dismiss_popup(self._conn)
+            return True
+        finally:
+            lock.release()
+
     async def _poll(self) -> str:
         """Returns 'POPUP', 'CRITICAL', or 'CLEAR'."""
         try:
@@ -244,8 +279,8 @@ class PopupWatcher:
                             "PopupWatcher: dismissing popup after %.1fs",
                             now - first_seen,
                         )
-                        await dismiss_popup(self._conn)
-                        first_seen = None
+                        if await self._dismiss_outside_end_turn(dismiss_popup):
+                            first_seen = None
                 else:
                     # CRITICAL or CLEAR — reset timer
                     first_seen = None

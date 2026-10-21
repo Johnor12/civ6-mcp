@@ -128,7 +128,7 @@ for i, c in Players[me]:GetCities():Members() do
     end end
     table.insert(cityCoords, {name=nm, x=c:GetX(), y=c:GetY()})
     local loy, loyMax, loyPT, loyFlip = 100, 100, 0, 0
-    local cult = c:GetCulturalIdentity()
+    local cult = nil; pcall(function() cult = c:GetCulturalIdentity() end)
     if cult then
         loy = cult:GetLoyalty()
         loyMax = cult:GetMaxLoyalty()
@@ -534,9 +534,11 @@ local me = Game.GetLocalPlayer()
 local pCity = Players[me]:GetCities():FindID({city_id} % 65536)
 if pCity == nil then print("NOT_FOUND"); print("{SENTINEL}"); return end
 local bq = pCity:GetBuildQueue()
-local cur = bq:CurrentlyBuilding()
+local ok, cur = pcall(function() return bq:CurrentlyBuilding() end)
+if not ok then print("NOT_SET|readback_error"); print("{SENTINEL}"); return end
 if cur == "{item_name}" then
-    print("CONFIRMED|" .. bq:GetTurnsLeft() .. " turns")
+    local okT, turns = pcall(function() return bq:GetTurnsLeft() end)
+    print("CONFIRMED|" .. (okT and tostring(turns) or "?") .. " turns")
 else
     print("NOT_SET|current=" .. tostring(cur) .. "|expected={item_name}")
 end

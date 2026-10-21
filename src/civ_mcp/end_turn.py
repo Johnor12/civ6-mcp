@@ -490,7 +490,20 @@ def _check_save_scumming(gs: GameState) -> tuple[list[lq.TurnEvent], bool]:
 
 
 async def execute_end_turn(gs: GameState) -> str:
-    """End the turn with snapshot-diff event detection."""
+    """End the turn with snapshot-diff event detection.
+
+    Holds ``conn.end_turn_lock`` for the whole call so the background
+    PopupWatcher never lands a popup dismissal in the middle of turn
+    processing (see PopupWatcher._dismiss_outside_end_turn).
+    """
+    lock = getattr(gs.conn, "end_turn_lock", None)
+    if lock is None:
+        return await _execute_end_turn(gs)
+    async with lock:
+        return await _execute_end_turn(gs)
+
+
+async def _execute_end_turn(gs: GameState) -> str:
     # 0a. Run aborted due to save scumming — refuse to advance
     if gs._run_aborted:
         return (

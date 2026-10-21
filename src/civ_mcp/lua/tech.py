@@ -29,7 +29,10 @@ local civicName = "None"
 local civicTurns = -1
 if civicIdx >= 0 then
     civicName = Locale.Lookup(GameInfo.Civics[civicIdx].Name)
-    civicTurns = cu:GetTurnsLeftOnCurrentCivic()
+    -- GetTurnsLeft exists in the InGame state, GetTurnsLeftOnCurrentCivic in GameCore
+    if not pcall(function() civicTurns = cu:GetTurnsLeft() end) then
+        pcall(function() civicTurns = cu:GetTurnsLeftOnCurrentCivic() end)
+    end
 end
 print("CURRENT|" .. techName .. "|" .. techTurns .. "|" .. civicName .. "|" .. civicTurns)
 -- Build boost lookup
@@ -90,7 +93,8 @@ for civic in GameInfo.Civics() do
     if cu:HasCivic(civic.Index) then completedCivics = completedCivics + 1 end
 end
 print("COMPLETED|" .. completedTechs .. "|" .. completedCivics)
-local curEra = Game.GetEras():GetCurrentEra()
+local curEra = 0
+if not pcall(function() curEra = Game.GetEras():GetCurrentEra() end) then pcall(function() curEra = Players[id]:GetEra() end) end
 local prereqs = {}
 for row in GameInfo.CivicPrereqs() do
     if not prereqs[row.Civic] then prereqs[row.Civic] = {} end
@@ -115,7 +119,12 @@ for civic in GameInfo.Civics() do
                 pcall(function() currentProg = cu:GetCulturalProgress(civic.Index) end)
                 local pct2 = cost > 0 and math.floor(currentProg * 100 / cost) or 0
                 local cultureYield = Players[id]:GetCulture():GetCultureYield() or 1
-                local turns2 = cultureYield > 0 and math.ceil(cost / cultureYield) or -1
+                -- GetTurnsToProgressCivic (InGame only) accounts for banked progress;
+                -- GameCore has neither it nor GetCulturalProgress, so fall back to an estimate
+                local turns2 = -1
+                if not pcall(function() turns2 = cu:GetTurnsToProgressCivic(civic.Index) end) then
+                    turns2 = cultureYield > 0 and math.max(1, math.ceil((cost - currentProg) / cultureYield)) or -1
+                end
                 local boosted2 = cu:HasBoostBeenTriggered(civic.Index)
                 local boostDesc2 = ""
                 local b2 = boostsByCivic[civic.CivicType]

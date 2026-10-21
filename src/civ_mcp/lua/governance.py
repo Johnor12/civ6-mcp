@@ -92,7 +92,16 @@ def build_set_policies(assignments: dict[int, str]) -> str:
 
     Pre-checks run before UNLOCK_POLICIES because CanSlotPolicy is reliable there.
     It becomes stale same-frame after UNLOCK_POLICIES in the same Lua string.
+
+    The engine's CanSlotPolicy first checks !IsPolicyActive (see the game's own
+    GovernmentScreen.lua), so it rejects ANY card that is currently slotted,
+    whatever the target slot. Moving an active card is legal when the slot it
+    occupies is also in this batch (it is cleared before the add list applies);
+    otherwise the move would duplicate the card and the engine drops it.
     """
+    # Lua set of the slots this batch clears — an active card may move only
+    # out of one of these.
+    touched = ", ".join(f"[{k}]=true" for k in assignments)
     pre_checks = []  # policy lookup + CanSlotPolicy + type check — BEFORE UNLOCK_POLICIES
     add_entries = []  # addList[slot] = hash — AFTER UNLOCK_POLICIES
     clear_entries = []  # clearList entries — only slots we're touching
@@ -109,11 +118,15 @@ def build_set_policies(assignments: dict[int, str]) -> str:
             f'local pe_{slot_idx} = GameInfo.Policies["{policy_type}"]; '
             f"if pe_{slot_idx} == nil then {_bail(f'ERR:POLICY_NOT_FOUND|{policy_type}')} end; "
             # CanSlotPolicy pre-check (reliable before UNLOCK_POLICIES).
-            # CanSlotPolicy returns false when the policy is already in that exact slot,
-            # so we also check alreadyThere to avoid false positives on replace-in-place.
+            # It returns false for any card that is already active somewhere;
+            # rescue the case where that card's current slot is in this batch
+            # (replace-in-place or a move between two reassigned slots).
             f"local canSlot_{slot_idx} = pCulture:CanSlotPolicy(pe_{slot_idx}.Index, {slot_idx}); "
-            f"local alreadyThere_{slot_idx} = (pCulture:GetSlotPolicy({slot_idx}) == pe_{slot_idx}.Index); "
-            f"if not canSlot_{slot_idx} and not alreadyThere_{slot_idx} then "
+            f"local activeSlot_{slot_idx} = -1; "
+            f"for s = 0, numSlots - 1 do if pCulture:GetSlotPolicy(s) == pe_{slot_idx}.Index then activeSlot_{slot_idx} = s end end; "
+            f"if not canSlot_{slot_idx} and activeSlot_{slot_idx} >= 0 and not touched[activeSlot_{slot_idx}] then "
+            f"{_bail_lua(f''' "ERR:CANNOT_SLOT|{policy_type} is already slotted in slot " .. activeSlot_{slot_idx} .. " - include slot " .. activeSlot_{slot_idx} .. " in assignments (reassign it or set it to NONE) to move the card to slot {slot_idx}" ''')} end; "
+            f"if not canSlot_{slot_idx} and activeSlot_{slot_idx} < 0 then "
             f'local pType_{slot_idx} = pe_{slot_idx}.GovernmentSlotType or "unknown"; '
             f"local st_{slot_idx} = pCulture:GetSlotType({slot_idx}); "
             f'local sName_{slot_idx} = slotNames[st_{slot_idx}] or ("type_" .. st_{slot_idx}); '
@@ -140,6 +153,7 @@ local numSlots = pCulture:GetNumPolicySlots()
 if numSlots <= 0 then {_bail("ERR:NO_GOVERNMENT|No government selected")} end
 local slotNames = {{[0]="Economic", [1]="Military", [2]="Diplomatic", [3]="Wildcard", [4]="Wildcard"}}
 local slotTypeMap = {{SLOT_ECONOMIC=0, SLOT_MILITARY=1, SLOT_DIPLOMATIC=2, SLOT_WILDCARD=3, SLOT_GREAT_PERSON=4}}
+local touched = {{{touched}}}
 {pre_lua}
 UI.RequestPlayerOperation(me, PlayerOperations.UNLOCK_POLICIES, {{}})
 local clearList = {{}}
@@ -421,7 +435,8 @@ csTypeMap["LEADER_MINOR_CIV_MILITARISTIC"] = "Militaristic"
 csTypeMap["LEADER_MINOR_CIV_RELIGIOUS"] = "Religious"
 csTypeMap["LEADER_MINOR_CIV_TRADE"] = "Trade"
 csTypeMap["LEADER_MINOR_CIV_INDUSTRIAL"] = "Industrial"
-for i = 0, 62 do
+-- 0-61 only: player 62 is the Free Cities pseudo-civ (minor, non-barbarian) and 63 is barbarians
+for i = 0, 61 do
     if Players[i] and Players[i]:IsAlive() and Players[i]:IsMajor() == false and Players[i]:IsBarbarian() == false and pDiplo:HasMet(i) then
         local cfg = PlayerConfigurations[i]
         local name = Locale.Lookup(cfg:GetPlayerName())
