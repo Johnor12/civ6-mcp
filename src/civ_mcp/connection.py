@@ -88,11 +88,20 @@ class GameConnection:
         )
 
     async def disconnect(self) -> None:
-        if self._writer and not self._writer.is_closing():
-            self._writer.close()
-            await self._writer.wait_closed()
+        writer = self._writer
         self._writer = None
         self._reader = None
+        if writer is None or writer.is_closing():
+            return
+        try:
+            writer.close()
+            await writer.wait_closed()
+        except (ConnectionError, OSError) as e:
+            # The game dropped the socket (save load, return to the main
+            # menu, hotseat session): closing our side then reports e.g.
+            # WinError 64. The socket is gone either way, so the reconnect
+            # that follows must not be aborted by it.
+            log.debug("Ignoring error while closing dead socket: %s", e)
 
     async def ensure_connected(self) -> None:
         """Connect (or reconnect) if not connected. Raises ConnectionError on failure."""
@@ -154,6 +163,29 @@ class GameConnection:
                 log.info("Connection lost, reconnecting...")
                 await self.reconnect()
                 return await self._locked_execute(state_index, lua_code, timeout)
+            except LuaError as e:
+                # The game keeps the socket open across a save load / return
+                # to the main menu, but every Lua state is torn down and
+                # re-created with new indexes. The cached GameCore/InGame
+                # indexes then answer "ERR:Invalid Lua State" forever, so
+                # re-handshake to rediscover them and retry once (only when
+                # the caller used one of the cached indexes).
+                if "Invalid Lua State" not in str(e):
+                    raise
+                if state_index not in (self.gamecore_index, self.ingame_index):
+                    raise
+                was_gamecore = state_index == self.gamecore_index
+                log.info(
+                    "Stale Lua state index %s — re-discovering states", state_index
+                )
+                await self.reconnect()
+                new_index = self.gamecore_index if was_gamecore else self.ingame_index
+                if new_index is None:
+                    raise ConnectionError(
+                        "GameCore_Tuner/InGame states not found after reload. "
+                        "Make sure a game is in progress (not at the main menu)."
+                    ) from e
+                return await self._locked_execute(new_index, lua_code, timeout)
 
     async def _locked_execute(
         self, state_index: int, lua_code: str, timeout: float

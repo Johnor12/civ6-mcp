@@ -26,6 +26,19 @@ Connect any MCP-compatible client — Claude Code, Codex, Gemini CLI, or your ow
 
 Every turn, `end_turn` takes before/after snapshots and reports what happened: units damaged, cities grew, production completed, threats spotted near your cities.
 
+## Hotseat stand-in (this fork)
+
+This fork adds a **stand-in mode** for local hotseat games: when one of the human players is away, the agent plays their turn for them. Civ 6 switches FireTuner off inside hotseat sessions, so the turn is played in a single-player copy of the hotseat save and converted back:
+
+```bash
+uv run python scripts/hotseat_standin.py to-single "POUNDMAKER 63 150 AD" --leader LEADER_POUNDMAKER
+#   load MCP_STANDIN_IN in the game, let the agent play; end_turn saves MCP_STANDIN_OUT
+uv run python scripts/hotseat_standin.py to-hotseat
+#   load the result via Multiplayer > Hotseat > Load Game and press End Turn
+```
+
+In stand-in mode `end_turn` never ends the turn, every tool refuses to act for any other player, the diary persists per game and player, and `run_lua` is removed. Full workflow, guarantees and limitations: [docs/hotseat-standin.md](docs/hotseat-standin.md).
+
 ## Quick start
 
 ### 1. Configure Civ 6
@@ -55,11 +68,10 @@ Enable the FireTuner debug interface and configure recommended settings:
 <details>
 <summary><strong>Windows: additional setup</strong></summary>
 
-**Install the Civ 6 SDK** — the tuner server is part of the SDK, not the base game:
-1. In Steam, go to Library → filter by Tools
-2. Find and install "Sid Meier's Civilization VI SDK"
+**The Civ 6 SDK is not required** — the tuner server is built into the game; `EnableTuner 1` (the in-game "Tuner" option) is enough. Install the SDK only if you want its FireTuner GUI.
 
 **Important notes:**
+- The tuner is **disabled in multiplayer, including local hotseat**. See `docs/hotseat-standin.md` for playing a hotseat player's turn through a single-player copy of the save.
 - Close `FireTuner.exe` (the SDK's GUI tool) before running civ6-mcp — the game only allows **one** tuner connection at a time
 - Do **not** run from WSL — the network bridging between WSL2 and Windows is unreliable and the tuner server locks up after failed connections
 - If the connection fails, **restart the game** — the tuner often hangs after a bad handshake and won't recover until the process is recycled

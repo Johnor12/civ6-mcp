@@ -6,6 +6,16 @@ An MCP server connecting to a live Civilization VI game via FireTuner. You can r
 
 `end_turn` now runs **empire warnings** automatically — alerts for loyalty crises, idle trade routes, gold deficits, resource caps, scoreboard position, and military imbalance. These compensate for the most common blind spots, but don't replace periodic deep checks (victory progress, religion spread, diplomacy).
 
+## Hotseat Stand-In Mode
+
+This fork is used to play an absent player's turn in a local hotseat game. The game disables FireTuner in hotseat sessions, so the turn is played in a single-player copy of the hotseat save (see `docs/hotseat-standin.md`). When `get_game_overview` prints a **STAND-IN MODE** paragraph:
+
+- You control exactly one civilization — the leader named there. Every other major civilization is a human being who plays their own turns later. Treat them as humans: trade and diplomacy proposals get answered on their turn, `propose_trade(mode="test")` says nothing about what a human accepts, and leader "agendas" and AI relationship modifiers are meaningless.
+- Start with `get_diary`: the diary for this player persists across sessions and holds what you (or the human) did and planned before. The player's note in the stand-in paragraph is the instruction to follow.
+- `end_turn` does **not** advance the game. It checks everything a real end turn would check, refuses while any unit still has moves, then saves the finished turn. Call it exactly once when the turn is done; if it reports a blocker, resolve it and call again. Never try to load other saves or to "continue" after it reports TURN FINISHED.
+- Play the civilization the way its owner would: steady, no gambits they did not ask for, no wars or peace deals unless the note says so. When in doubt, leave a clear diary entry about what you did and why.
+- You only see what this player can see. Do not try to work around that.
+
 ## Coordinate System
 
 **Hex grid: (X, Y) where higher Y = visually south.**
@@ -266,6 +276,8 @@ Use `get_district_advisor(city_id, district_type)` for ranked tiles. Then `set_c
 - Don't delete GPs — they show 0 builder charges but that's a different system; they're not consumed until activated
 
 ## World Congress
+
+If `get_world_congress` says the congress has not convened, or the game has it disabled, skip this section.
 
 WC fires synchronously inside `end_turn()` — register votes **before** calling end_turn.
 

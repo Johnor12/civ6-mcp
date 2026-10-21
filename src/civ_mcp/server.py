@@ -20,6 +20,8 @@ import uvicorn
 from mcp.server.fastmcp import Context, FastMCP
 
 from civ_mcp import game_launcher, heartbeat
+from civ_mcp import standin as _standin
+from civ_mcp.end_turn import execute_finish_turn
 from civ_mcp.game_over_watchdog import GameOverWatchdog
 from civ_mcp import narrate as nr
 from civ_mcp.connection import GameConnection, LuaError
@@ -56,6 +58,7 @@ class AppContext:
     spatial: SpatialTracker
     map_capture: MapCapture
     watchdog: GameOverWatchdog
+    standin_guard: _standin.StandinGuard
 
 
 async def _auto_boot(conn: GameConnection, save_name: str) -> None:
@@ -297,6 +300,16 @@ async def lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
     alert_webhook = os.environ.get("CIV_MCP_ALERT_WEBHOOK")
     if alert_webhook:
         emitter.add_sink(AlertSink(alert_webhook))
+    # Hotseat stand-in mode (see standin.py): a stable run id so the diary
+    # for this game + player persists across Claude sessions.
+    _standin_cfg = _standin.active_config()
+    if _standin_cfg is not None:
+        os.environ.setdefault("CIV_MCP_RUN_ID", _standin.STANDIN_RUN_ID)
+        log.info(
+            "Stand-in mode active: playing %s (from hotseat save %r)",
+            _standin_cfg.leader,
+            _standin_cfg.hotseat_save,
+        )
     emitter.start()
     heartbeat.init(emitter.run_id)
     # Bind eval identity so the orchestrator can match running games to jobs
@@ -332,10 +345,13 @@ async def lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
 
     # Start the web dashboard API as a background task (port 8000)
     web_app = create_app(gs)
-    uvi_config = uvicorn.Config(web_app, host="0.0.0.0", port=8000, log_level="info")
+    # Bound to localhost by default: the dashboard exposes the whole game
+    # state of the current player, which must not leak onto the LAN.
+    web_host = os.environ.get("CIV_MCP_WEB_HOST", "127.0.0.1")
+    uvi_config = uvicorn.Config(web_app, host=web_host, port=8000, log_level="info")
     uvi_server = uvicorn.Server(uvi_config)
     api_task = asyncio.create_task(uvi_server.serve())
-    log.info("Web API starting on http://0.0.0.0:8000")
+    log.info("Web API starting on http://%s:8000", web_host)
 
     try:
         yield AppContext(
@@ -346,6 +362,7 @@ async def lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
             spatial=spatial,
             map_capture=map_capture,
             watchdog=watchdog,
+            standin_guard=_standin.StandinGuard(),
         )
     finally:
         await emitter.close()
@@ -388,6 +405,26 @@ def _get_watchdog(ctx: Context) -> GameOverWatchdog:
     return ctx.request_context.lifespan_context.watchdog
 
 
+def _get_standin_guard(ctx: Context) -> _standin.StandinGuard:
+    return ctx.request_context.lifespan_context.standin_guard
+
+
+# Tools that may run even when the stand-in guard cannot confirm the local
+# player: they are how the operator gets the right save loaded.
+_STANDIN_UNGUARDED = frozenset(
+    {
+        "list_saves",
+        "load_save",
+        "load_game_save",
+        "load_save_from_menu",
+        "launch_game",
+        "kill_game",
+        "restart_and_load",
+        "dismiss_popup",
+    }
+)
+
+
 def _param_summary(params: dict[str, Any]) -> str:
     """Compact one-line summary of tool params for console logging."""
     if not params:
@@ -418,6 +455,18 @@ async def _logged(
     """Run a tool function with timing, error handling, and logging."""
     logger = _get_logger(ctx)
     turn = logger._turn or "?"
+    standin_cfg = _standin.active_config()
+    if standin_cfg is not None and tool_name not in _STANDIN_UNGUARDED:
+        try:
+            refusal = await _get_standin_guard(ctx).check(
+                _get_game(ctx).conn, standin_cfg
+            )
+        except Exception as e:  # noqa: BLE001 — refuse rather than act blind
+            refusal = f"Stand-in guard: could not verify the local player ({e})."
+        if refusal:
+            log.warning("[T%s] %s refused: %s", turn, tool_name, refusal)
+            await logger.log_error(tool_name, refusal)
+            return refusal
     start = time.monotonic()
     try:
         result = await fn()
@@ -450,7 +499,15 @@ async def _logged(
         # Connection-loss recovery: after consecutive failures,
         # the game has likely crashed. Auto-restart from autosave.
         _logged._conn_errors = getattr(_logged, "_conn_errors", 0) + 1
-        if _logged._conn_errors >= 5:
+        if _logged._conn_errors >= 5 and standin_cfg is not None:
+            # Never kill or relaunch the game client on the players' behalf.
+            log.error(
+                "CONNECTION RECOVERY skipped in stand-in mode after %d failures "
+                "- check that the converted single-player save is loaded",
+                _logged._conn_errors,
+            )
+            _logged._conn_errors = 0
+        elif _logged._conn_errors >= 5:
             log.error(
                 "CONNECTION RECOVERY: %d consecutive connection failures "
                 "— triggering restart_and_load",
@@ -545,6 +602,9 @@ async def get_game_overview(ctx: Context) -> str:
             except Exception:
                 log.debug("Failed to seed revealed tiles", exc_info=True)
         text = nr.narrate_overview(ov)
+        standin_cfg = _standin.active_config()
+        if standin_cfg is not None:
+            text += "\n\n" + _standin.status_text(standin_cfg)
         # Check for game-over state
         gameover = await gs.check_game_over()
         if gameover is not None:
@@ -1802,6 +1862,7 @@ async def end_turn(
     the diary entry from the first call is kept — do not repeat reflections.
     """
     gs = _get_game(ctx)
+    standin_cfg = _standin.active_config()
 
     reflections = {
         "tactical": tactical,
@@ -1895,6 +1956,8 @@ async def end_turn(
                 _emitter = _get_logger(ctx)._emitter
                 # Write one row per player (emitter routes to sinks)
                 for pr in _diary_snapshot.players:
+                    if standin_cfg is not None and pr.pid != _diary_player_id:
+                        continue  # stand-in: never record other players' figures
                     row = asdict(pr)
                     row["v"] = 1
                     row["turn"] = _diary_turn
@@ -1927,6 +1990,8 @@ async def end_turn(
                     await _emitter.emit(EVENT_DIARY_ROW, row)
                 # Write one row per city
                 for cr in _diary_snapshot.cities:
+                    if standin_cfg is not None and cr.pid != _diary_player_id:
+                        continue
                     row = asdict(cr)
                     row["v"] = 1
                     row["turn"] = _diary_turn
@@ -1935,6 +2000,27 @@ async def end_turn(
                 gs._diary_written_turn = _diary_turn
             except Exception:
                 log.warning("Diary: failed to write entry", exc_info=True)
+
+    # Stand-in mode: finish the turn and save; never send ACTION_ENDTURN,
+    # because the other civilizations belong to human hotseat players.
+    if standin_cfg is not None:
+        out_save = standin_cfg.out_save or _standin.DEFAULT_OUT_SAVE
+        result = await _logged(
+            ctx, "end_turn", {}, lambda: execute_finish_turn(gs, out_save)
+        )
+        if "FINISHED" in result:
+            gs._end_turn_blocked = False
+            try:
+                standin_cfg.finished_turn = _diary_turn or None
+                standin_cfg.finished_at = datetime.now(timezone.utc).isoformat(
+                    timespec="seconds"
+                )
+                _standin.save_config(standin_cfg)
+            except Exception:
+                log.debug("Could not update stand-in marker", exc_info=True)
+        else:
+            gs._end_turn_blocked = True  # a retry merges its reflections
+        return result
 
     # Advance the turn
     result = await _logged(ctx, "end_turn", {}, gs.end_turn)
@@ -2918,7 +3004,11 @@ def main():
             signal.SIGTERM, lambda sig, frame: os.kill(os.getpid(), signal.SIGINT)
         )
 
-    if os.environ.get("CIV_MCP_DISABLE_LUA"):
+    if os.environ.get("CIV_MCP_DISABLE_LUA") or (
+        _standin.active_config() is not None
+        and not os.environ.get("CIV_MCP_STANDIN_ALLOW_LUA")
+    ):
+        # Arbitrary Lua could read any player's state - not for a stand-in.
         mcp._tool_manager.remove_tool("run_lua")
 
     mcp.run(transport="stdio")

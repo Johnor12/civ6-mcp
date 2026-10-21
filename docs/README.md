@@ -3,6 +3,7 @@
 ## For Users
 
 - [Getting Started](../README.md#quick-start) — Setup and first game
+- [Hotseat Stand-In](hotseat-standin.md) — Playing an absent hotseat player's turn through a single-player copy of the save (this fork)
 - [Tool Reference](https://civbench.vercel.app/docs/tools) — All 76 MCP tools (web)
 
 ## For Developers

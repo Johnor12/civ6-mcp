@@ -219,7 +219,9 @@ for i = 0, 62 do
                 print("RELFOUNDED|" .. name .. "|" .. fName)
             end
         end
-        -- Demographics: collect for ALL alive majors (anonymized aggregates)
+        -- Demographics: met civilizations only — an unmet player's figures
+        -- must not leak through the aggregates.
+        if met then
         local totalPop = 0
         local totalFood, totalProd = 0, 0
         local ownedPlots = 0
@@ -238,6 +240,7 @@ for i = 0, 62 do
         table.insert(dGold, {{v=netGold, mine=(i==me)}})
         table.insert(dLand, {{v=ownedPlots, mine=(i==me)}})
         table.insert(dProd, {{v=totalProd, mine=(i==me)}})
+        end
     end
 end
 local function emitDemo(label, arr)

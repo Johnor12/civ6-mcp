@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Hotseat stand-in mode (this fork)
+
+Civ 6 disables FireTuner inside hotseat sessions (verified: the port closes in the staging room and reopens at the main menu), so an absent hotseat player's turn is played in a single-player copy of the save. See `docs/hotseat-standin.md`.
+
+- **`scripts/hotseat_standin.py`**: `inspect` / `to-single` / `to-hotseat` / `status` / `clear`. Flips the per-slot `ACTOR_AI_HUMAN` header words (3 = human, 1 = AI) and restores them plus `IS_CURRENT_TURN` on the way back; the compressed game state is untouched. Writes the marker `~/.civ6-mcp/standin.json` that switches the server into stand-in mode.
+- **Stand-in mode in the server** (`civ_mcp/standin.py`): `end_turn` runs the usual blocker checks, refuses while units still have moves, then saves the finished turn instead of sending `ACTION_ENDTURN`; a guard refuses every game tool when the local player is not the marker's leader or the game is a multiplayer session; only the agent's own diary rows are written, under the fixed run id `standin` so the diary persists across sessions; `run_lua` is removed (`CIV_MCP_STANDIN_ALLOW_LUA=1` keeps it); the connection-loss auto-restart is disabled.
+- **Stale Lua state fix**: after a save load or a trip through the main menu the game keeps the tuner socket open but re-creates every Lua state; cached GameCore/InGame indexes then answered `ERR:Invalid Lua State` until the server was restarted. The connection now re-handshakes and retries once. `disconnect()` tolerates a socket the game already dropped (WinError 64 previously aborted every reconnect).
+- **World Congress narration**: `TurnsLeft = 0` with no resolutions means "not convened" (not founded yet, or disabled), not "fires this turn".
+- **Victory demographics** cover met civilizations only.
+- **Web dashboard API** binds to `127.0.0.1` by default (`CIV_MCP_WEB_HOST` to expose it).
+- `list_saves` also lists the `Saves/Hotseat` folder (tagged `[hotseat]`); new `HOTSEAT_SAVE_DIR` in `game_launcher`.
+- README: the Civ 6 SDK is not needed for the tuner on Windows.
+
 ### Fork sweep (fixes ported from the rossklin and nace-ai forks)
 
 - **Leader-dialogue freeze fix**: `respond_to_diplomacy` waits up to ~4 s for the leader's reply instead of force-closing after 0.3 s, and leaves goodbye-phase conversations through the view's own exit (CHOICE_EXIT) rather than `DiplomacyManager.CloseSession`. A forced close while the view was still presenting left `UI.ReferenceCurrentEvent` held: units at 0 moves, end-turn button stuck on PLEASE WAIT. `EXIT` is now an accepted response.

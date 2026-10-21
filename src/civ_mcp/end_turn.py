@@ -489,111 +489,14 @@ def _check_save_scumming(gs: GameState) -> tuple[list[lq.TurnEvent], bool]:
     return events, False
 
 
-async def execute_end_turn(gs: GameState) -> str:
-    """End the turn with snapshot-diff event detection.
+async def _resolve_blockers(gs: GameState, turn_at_entry: int | None) -> str | None:
+    """Auto-resolve soft end-turn blockers; return a message for hard ones.
 
-    Holds ``conn.end_turn_lock`` for the whole call so the background
-    PopupWatcher never lands a popup dismissal in the middle of turn
-    processing (see PopupWatcher._dismiss_outside_end_turn).
+    Returns None when nothing blocks the turn (or the game says it can end
+    anyway, or the turn already advanced externally), else the text to hand
+    back to the agent. Shared by the real end_turn and the stand-in
+    finish_turn so both apply the same rules.
     """
-    lock = getattr(gs.conn, "end_turn_lock", None)
-    if lock is None:
-        return await _execute_end_turn(gs)
-    async with lock:
-        return await _execute_end_turn(gs)
-
-
-async def _execute_end_turn(gs: GameState) -> str:
-    # 0a. Run aborted due to save scumming — refuse to advance
-    if gs._run_aborted:
-        return (
-            "RUN ABORTED — save scumming threshold exceeded. "
-            "This benchmark run has been invalidated because the agent "
-            "loaded saves across too many distinct turns. Benchmark runs "
-            "must play forward from a single starting save. No further "
-            "actions will be processed."
-        )
-
-    # 0. Game-over check — don't try to advance a finished game
-    gameover = await gs.check_game_over()
-    if gameover is not None:
-        gs._pending_end_turn = False
-        gs._pending_end_turn_from = None
-        gs._last_game_over = gameover
-        vtype = gameover.victory_type.replace("VICTORY_", "").replace("_", " ").title()
-        if gameover.is_defeat:
-            return (
-                f"GAME OVER — DEFEAT. {gameover.winner_leader} of {gameover.winner_name} won a {vtype} victory. "
-                f"The game has ended. No further actions are possible."
-            )
-        else:
-            return (
-                f"GAME OVER — VICTORY! You won a {vtype} victory! The game has ended."
-            )
-
-    # Record turn number at entry so we can detect external advancement
-    # (e.g. game auto-ends turn when skip_remaining_units finishes all moves)
-    turn_at_entry = await _get_turn_number(gs)
-
-    # 1. Diplomacy sessions block turn advancement
-    sessions = await gs.get_diplomacy_sessions()
-    if sessions:
-        session_info = []
-        for s in sessions:
-            phase = "goodbye" if s.buttons == "GOODBYE" else "active"
-            session_info.append(f"{s.other_civ_name} ({s.other_leader_name}) [{phase}]")
-        return (
-            f"Cannot end turn: diplomacy encounter pending with {', '.join(session_info)}. "
-            f"Use respond_to_diplomacy to handle it."
-        )
-
-    # 1b. Check for incoming trade deal offers (e.g. delegations from other civs)
-    try:
-        deals = await gs.get_pending_deals()
-        if deals:
-            return (
-                "Cannot end turn: incoming trade deal pending.\n"
-                + nr.narrate_pending_deals(deals)
-            )
-    except Exception:
-        log.debug("Pending deal check failed", exc_info=True)
-
-    # 2. Pre-dismiss any ExclusivePopupManager popups (wonder, disaster, era)
-    # that may hold engine locks blocking turn advancement.
-    try:
-        pre_dismiss = await gs.dismiss_popup()
-        if "Dismissed" in pre_dismiss:
-            log.info("Pre-turn popup dismissed: %s", pre_dismiss)
-    except Exception:
-        log.debug("Pre-turn dismiss failed", exc_info=True)
-
-    # 2b. World Congress gate — if WC fires this turn and no handler is
-    #     registered, block end_turn and tell the agent to vote first.
-    #     The WC session opens+closes within ACTION_ENDTURN synchronously,
-    #     so we MUST register a handler BEFORE sending ACTION_ENDTURN.
-    try:
-        wc_status = await gs.get_world_congress()
-        if wc_status.turns_until_next <= 0 or wc_status.is_in_session:
-            n_res = len(wc_status.resolutions) if wc_status.resolutions else 0
-            # Skip gate when WC fires with 0 resolutions — nothing to vote on
-            if n_res == 0 and not wc_status.is_in_session:
-                log.info("WC fires this turn with 0 resolutions — auto-proceeding")
-            else:
-                handler_lines = await gs.conn.execute_write(
-                    f'print(__civmcp_wc_handler and "HANDLER_SET" or "NO_HANDLER"); '
-                    f'print("{lq.SENTINEL}")'
-                )
-                handler_set = any("HANDLER_SET" in l for l in handler_lines)
-                if not handler_set:
-                    return (
-                        f"World Congress fires this turn ({n_res} resolution(s), {wc_status.favor} favor). "
-                        f"Use get_world_congress() to review resolutions and targets, "
-                        f"then queue_wc_votes() to register your votes, "
-                        f"then call end_turn() again."
-                    )
-    except Exception:
-        log.debug("WC imminence check failed", exc_info=True)
-
     # 3. Check ALL EndTurnBlocking notifications at once, auto-resolve soft
     #    blockers, and report remaining hard blockers in a single message.
     for _round in range(3):
@@ -1121,6 +1024,215 @@ async def _execute_end_turn(gs: GameState) -> str:
         except Exception:
             log.debug("Blocking check failed, proceeding anyway", exc_info=True)
             break
+    return None
+
+
+async def execute_finish_turn(gs: GameState, out_save: str) -> str:
+    """Stand-in mode: finish the turn without ending it, then save.
+
+    Mirrors execute_end_turn up to the point where it would send
+    ACTION_ENDTURN: open diplomacy sessions, incoming deals and hard
+    end-turn blockers are reported exactly as end_turn would report them.
+    When nothing blocks the turn, the game is saved as ``out_save`` (a
+    single-player save) and the agent is told what happens next. The AI
+    never processes the other civilizations — in the real hotseat game
+    those are human players.
+    """
+    lock = getattr(gs.conn, "end_turn_lock", None)
+    if lock is None:
+        return await _execute_finish_turn(gs, out_save)
+    async with lock:
+        return await _execute_finish_turn(gs, out_save)
+
+
+async def _execute_finish_turn(gs: GameState, out_save: str) -> str:
+    turn = await _get_turn_number(gs)
+
+    sessions = await gs.get_diplomacy_sessions()
+    if sessions:
+        names = ", ".join(
+            f"{s.other_civ_name} ({s.other_leader_name})" for s in sessions
+        )
+        return (
+            f"Cannot finish turn: diplomacy encounter pending with {names}. "
+            f"Use respond_to_diplomacy to handle it."
+        )
+    try:
+        deals = await gs.get_pending_deals()
+        if deals:
+            return "Cannot finish turn: incoming trade deal pending.\n" + (
+                nr.narrate_pending_deals(deals)
+            )
+    except Exception:
+        log.debug("Pending deal check failed", exc_info=True)
+
+    try:
+        pre_dismiss = await gs.dismiss_popup()
+        if "Dismissed" in pre_dismiss:
+            log.info("Pre-finish popup dismissed: %s", pre_dismiss)
+    except Exception:
+        log.debug("Pre-finish dismiss failed", exc_info=True)
+
+    blocker_msg = await _resolve_blockers(gs, turn)
+    if blocker_msg is not None:
+        return blocker_msg.replace("Cannot end turn", "Cannot finish turn")
+
+    # Units with moves left are not a hard blocker for the engine (a human
+    # could just press End Turn), but a stand-in must not leave a unit's
+    # turn unplayed by accident. Report them instead of saving.
+    try:
+        idle_lines = await gs.conn.execute_read(
+            "local me = Game.GetLocalPlayer() "
+            "local idle = {} "
+            "for _, u in Players[me]:GetUnits():Members() do "
+            "  if u:GetX() ~= -9999 and u:GetMovesRemaining() > 0 "
+            "     and u:GetFortifyTurns() == 0 then "
+            "    local e = GameInfo.Units[u:GetType()] "
+            '    table.insert(idle, (e and e.UnitType or "UNIT") .. "@" .. u:GetX() .. "," .. u:GetY() .. " (idx:" .. u:GetID() .. ")") '
+            "  end "
+            "end "
+            'if #idle > 0 then print("IDLE|" .. table.concat(idle, "; ")) else print("NONE") end '
+            f'print("{lq.SENTINEL}")'
+        )
+        idle = next(
+            (l.split("|", 1)[1] for l in idle_lines if l.startswith("IDLE|")), ""
+        )
+        if idle:
+            return (
+                "Cannot finish turn: these units still have moves — move, fortify, "
+                f"sleep or skip each one first: {idle}"
+            )
+    except Exception:
+        log.debug("Idle unit check failed", exc_info=True)
+
+    save_result = await save_game(gs.conn, out_save)
+    if not save_result.startswith("Saved"):
+        return f"Turn NOT finished — {save_result}"
+    try:
+        gs._last_snapshot = await gs._take_snapshot()
+    except Exception:
+        log.debug("Post-finish snapshot failed", exc_info=True)
+    turn_label = f"turn {turn}" if turn is not None else "this turn"
+    return (
+        f"TURN {turn} FINISHED (not ended) and saved as '{out_save}'.\n"
+        "Stand-in mode: the game turn does not advance here. The operator now runs\n"
+        "  uv run python scripts/hotseat_standin.py to-hotseat\n"
+        "to put the finished turn back into the hotseat game, where End Turn is "
+        f"pressed for {turn_label}. Do not call end_turn again unless asked to "
+        "change something."
+    )
+
+
+async def execute_end_turn(gs: GameState) -> str:
+    """End the turn with snapshot-diff event detection.
+
+    Holds ``conn.end_turn_lock`` for the whole call so the background
+    PopupWatcher never lands a popup dismissal in the middle of turn
+    processing (see PopupWatcher._dismiss_outside_end_turn).
+    """
+    lock = getattr(gs.conn, "end_turn_lock", None)
+    if lock is None:
+        return await _execute_end_turn(gs)
+    async with lock:
+        return await _execute_end_turn(gs)
+
+
+async def _execute_end_turn(gs: GameState) -> str:
+    # 0a. Run aborted due to save scumming — refuse to advance
+    if gs._run_aborted:
+        return (
+            "RUN ABORTED — save scumming threshold exceeded. "
+            "This benchmark run has been invalidated because the agent "
+            "loaded saves across too many distinct turns. Benchmark runs "
+            "must play forward from a single starting save. No further "
+            "actions will be processed."
+        )
+
+    # 0. Game-over check — don't try to advance a finished game
+    gameover = await gs.check_game_over()
+    if gameover is not None:
+        gs._pending_end_turn = False
+        gs._pending_end_turn_from = None
+        gs._last_game_over = gameover
+        vtype = gameover.victory_type.replace("VICTORY_", "").replace("_", " ").title()
+        if gameover.is_defeat:
+            return (
+                f"GAME OVER — DEFEAT. {gameover.winner_leader} of {gameover.winner_name} won a {vtype} victory. "
+                f"The game has ended. No further actions are possible."
+            )
+        else:
+            return (
+                f"GAME OVER — VICTORY! You won a {vtype} victory! The game has ended."
+            )
+
+    # Record turn number at entry so we can detect external advancement
+    # (e.g. game auto-ends turn when skip_remaining_units finishes all moves)
+    turn_at_entry = await _get_turn_number(gs)
+
+    # 1. Diplomacy sessions block turn advancement
+    sessions = await gs.get_diplomacy_sessions()
+    if sessions:
+        session_info = []
+        for s in sessions:
+            phase = "goodbye" if s.buttons == "GOODBYE" else "active"
+            session_info.append(f"{s.other_civ_name} ({s.other_leader_name}) [{phase}]")
+        return (
+            f"Cannot end turn: diplomacy encounter pending with {', '.join(session_info)}. "
+            f"Use respond_to_diplomacy to handle it."
+        )
+
+    # 1b. Check for incoming trade deal offers (e.g. delegations from other civs)
+    try:
+        deals = await gs.get_pending_deals()
+        if deals:
+            return (
+                "Cannot end turn: incoming trade deal pending.\n"
+                + nr.narrate_pending_deals(deals)
+            )
+    except Exception:
+        log.debug("Pending deal check failed", exc_info=True)
+
+    # 2. Pre-dismiss any ExclusivePopupManager popups (wonder, disaster, era)
+    # that may hold engine locks blocking turn advancement.
+    try:
+        pre_dismiss = await gs.dismiss_popup()
+        if "Dismissed" in pre_dismiss:
+            log.info("Pre-turn popup dismissed: %s", pre_dismiss)
+    except Exception:
+        log.debug("Pre-turn dismiss failed", exc_info=True)
+
+    # 2b. World Congress gate — if WC fires this turn and no handler is
+    #     registered, block end_turn and tell the agent to vote first.
+    #     The WC session opens+closes within ACTION_ENDTURN synchronously,
+    #     so we MUST register a handler BEFORE sending ACTION_ENDTURN.
+    try:
+        wc_status = await gs.get_world_congress()
+        if wc_status.turns_until_next <= 0 or wc_status.is_in_session:
+            n_res = len(wc_status.resolutions) if wc_status.resolutions else 0
+            # Skip gate when WC fires with 0 resolutions — nothing to vote on
+            if n_res == 0 and not wc_status.is_in_session:
+                log.info("WC fires this turn with 0 resolutions — auto-proceeding")
+            else:
+                handler_lines = await gs.conn.execute_write(
+                    f'print(__civmcp_wc_handler and "HANDLER_SET" or "NO_HANDLER"); '
+                    f'print("{lq.SENTINEL}")'
+                )
+                handler_set = any("HANDLER_SET" in l for l in handler_lines)
+                if not handler_set:
+                    return (
+                        f"World Congress fires this turn ({n_res} resolution(s), {wc_status.favor} favor). "
+                        f"Use get_world_congress() to review resolutions and targets, "
+                        f"then queue_wc_votes() to register your votes, "
+                        f"then call end_turn() again."
+                    )
+    except Exception:
+        log.debug("WC imminence check failed", exc_info=True)
+
+    # 3. Check ALL EndTurnBlocking notifications at once, auto-resolve soft
+    #    blockers, and report remaining hard blockers in a single message.
+    blocker_msg = await _resolve_blockers(gs, turn_at_entry)
+    if blocker_msg is not None:
+        return blocker_msg
 
     # Take pre-turn snapshot.
     # When re-entering after mid-turn diplomacy (_pending_end_turn=True),

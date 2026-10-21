@@ -458,26 +458,33 @@ def _list_saves_filesystem() -> str:
     import glob
     import os
 
-    from .game_launcher import SAVE_DIR
+    from .game_launcher import HOTSEAT_SAVE_DIR, SAVE_DIR
 
     save_base = os.path.dirname(SAVE_DIR)  # .../Saves/Single
-    all_saves: list[tuple[float, str]] = []
+    all_saves: list[tuple[float, str, str]] = []
 
     # Autosaves
     for f in glob.glob(os.path.join(SAVE_DIR, "*.Civ6Save")):
-        all_saves.append((os.path.getmtime(f), os.path.basename(f)))
+        all_saves.append((os.path.getmtime(f), os.path.basename(f), ""))
 
     # Normal saves (parent directory)
     for f in glob.glob(os.path.join(save_base, "*.Civ6Save")):
-        all_saves.append((os.path.getmtime(f), os.path.basename(f)))
+        all_saves.append((os.path.getmtime(f), os.path.basename(f), ""))
+
+    # Hotseat saves live in a sibling folder. They cannot be played through
+    # the tuner (it shuts down inside hotseat sessions); they are listed so
+    # the agent can name them for scripts/hotseat_standin.py.
+    if HOTSEAT_SAVE_DIR:
+        for f in glob.glob(os.path.join(HOTSEAT_SAVE_DIR, "*.Civ6Save")):
+            all_saves.append((os.path.getmtime(f), os.path.basename(f), " [hotseat]"))
 
     all_saves.sort(reverse=True)  # newest first
     if not all_saves:
         return "No saves found on filesystem."
 
     lines = ["Available saves (filesystem scan, sorted by date):"]
-    for i, (_mtime, name) in enumerate(all_saves[:25], 1):
-        lines.append(f"  {i}. {name.replace('.Civ6Save', '')}")
+    for i, (_mtime, name, tag) in enumerate(all_saves[:25], 1):
+        lines.append(f"  {i}. {name.replace('.Civ6Save', '')}{tag}")
     return "\n".join(lines)
 
 

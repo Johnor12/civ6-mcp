@@ -46,7 +46,9 @@ class GameState:
             None  # turn number when ACTION_ENDTURN was sent
         )
         self._high_water_turn: int = 0  # highest turn seen (for regression detection)
-        self._local_player_id: int = 0  # human player (always 0 in single-player)
+        self._local_player_id: int = (
+            0  # refreshed from the game (slot != 0 in hotseat-converted saves)
+        )
         self._hang_retry_active: bool = False  # guard against recursive hang recovery
         self._last_game_over: lq.GameOverStatus | None = (
             None  # captured by execute_end_turn for server.py
@@ -73,7 +75,8 @@ class GameState:
             "local me = Game.GetLocalPlayer() "
             "local cfg = PlayerConfigurations[me] "
             'print("GAMESEED|" .. cfg:GetCivilizationTypeName() '
-            '.. "|" .. tostring(GameConfiguration.GetValue("GAME_SYNC_RANDOM_SEED"))) '
+            '.. "|" .. tostring(GameConfiguration.GetValue("GAME_SYNC_RANDOM_SEED")) '
+            '.. "|" .. tostring(me)) '
             'print("---END---")'
         )
         lines = await self.conn.execute_write(code)
@@ -82,6 +85,10 @@ class GameState:
                 parts = line.split("|")
                 civ = parts[1].replace("CIVILIZATION_", "").lower()
                 seed = int(parts[2])
+                # The local player is slot 0 in a fresh single-player game but
+                # any slot in a save converted from hotseat.
+                if len(parts) > 3 and parts[3].lstrip("-").isdigit():
+                    self._local_player_id = int(parts[3])
                 new_id = (civ, seed)
                 if self._game_identity is not None and new_id != self._game_identity:
                     log.info("Game changed: %s → %s", self._game_identity, new_id)
@@ -104,6 +111,7 @@ class GameState:
         # InGame context needed for GetFavor() (nil in GameCore)
         lines = await self.conn.execute_write(lq.build_overview_query())
         ov = lq.parse_overview_response(lines)
+        self._local_player_id = ov.player_id
         # Bootstrap: capture baseline snapshot for first end_turn diff
         if self._last_snapshot is None:
             try:

@@ -1569,7 +1569,13 @@ def narrate_trade_destinations(dests: list[lq.TradeDestination]) -> str:
 
 def narrate_world_congress(status: lq.WorldCongressStatus) -> str:
     lines = []
-    imminent = not status.is_in_session and status.turns_until_next <= 0
+    # TurnsLeft reads 0 with no resolutions before the congress has ever
+    # convened (and when it is disabled) — that is not an imminent session.
+    imminent = (
+        not status.is_in_session
+        and status.turns_until_next <= 0
+        and bool(status.resolutions)
+    )
 
     if status.is_in_session or imminent:
         if status.is_in_session:
@@ -1595,12 +1601,15 @@ def narrate_world_congress(status: lq.WorldCongressStatus) -> str:
             costs_str = "1 vote=free, 2=10, 3=30, 4=60, 5=100, 6=150, 7=210, 8=280, 9=360, 10=450, 11=550"
         lines.append(f"Favor: {status.favor} | Vote costs (cumulative): {costs_str}")
     else:
-        if status.turns_until_next >= 0:
+        if status.turns_until_next > 0:
             lines.append(
                 f"World Congress: Next session in {status.turns_until_next} turns"
             )
         else:
-            lines.append("World Congress: Not yet convened")
+            lines.append(
+                "World Congress: Not convened (no session, no resolutions — "
+                "not founded yet, or disabled in this game)"
+            )
         lines.append(f"Favor: {status.favor}")
 
     if status.resolutions:
@@ -1830,7 +1839,7 @@ def narrate_victory_progress(vp: lq.VictoryProgress) -> str:
     # --- Demographics (all civilizations, anonymized) ---
     if vp.demographics:
         lines.append("")
-        lines.append("DEMOGRAPHICS (all civilizations)")
+        lines.append("DEMOGRAPHICS (known civilizations)")
         label_map = {
             "Population": "Population",
             "Soldiers": "Soldiers",

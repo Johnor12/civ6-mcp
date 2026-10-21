@@ -70,6 +70,7 @@ if sys.platform == "darwin":
     )
     SAVE_DIR = os.path.join(_SAVE_BASE, "auto")  # autosaves
     SINGLE_SAVE_DIR = _SAVE_BASE  # regular saves (including benchmark)
+    HOTSEAT_SAVE_DIR = os.path.join(os.path.dirname(_SAVE_BASE), "Hotseat")
 elif sys.platform == "win32":
     _PROCESS_NAMES = (
         "CivilizationVI_DX12.exe",
@@ -82,6 +83,7 @@ elif sys.platform == "win32":
     )
     SAVE_DIR = os.path.join(_SAVE_BASE, "auto")
     SINGLE_SAVE_DIR = _SAVE_BASE
+    HOTSEAT_SAVE_DIR = os.path.join(os.path.dirname(_SAVE_BASE), "Hotseat")
 elif sys.platform == "linux":
     _PROCESS_NAMES = ("Civ6", "Civ6Sub")
     _SAVE_BASE = os.path.expanduser(
@@ -89,10 +91,12 @@ elif sys.platform == "linux":
     )
     SAVE_DIR = os.path.join(_SAVE_BASE, "auto")
     SINGLE_SAVE_DIR = _SAVE_BASE
+    HOTSEAT_SAVE_DIR = os.path.join(os.path.dirname(_SAVE_BASE), "Hotseat")
 else:
     _PROCESS_NAMES = ()
     SAVE_DIR = ""
     SINGLE_SAVE_DIR = ""
+    HOTSEAT_SAVE_DIR = ""
 
 # How long to wait after kill for Steam to deregister the game
 _KILL_SETTLE_SECONDS = 10
