@@ -28,16 +28,15 @@ Every turn, `end_turn` takes before/after snapshots and reports what happened: u
 
 ## Hotseat stand-in (this fork)
 
-This fork adds a **stand-in mode** for local hotseat games: when one of the human players is away, the agent plays their turn for them. Civ 6 switches FireTuner off inside hotseat sessions, so the turn is played in a single-player copy of the hotseat save and converted back:
+This fork adds a **stand-in mode** for local hotseat games: when one of the human players is away, the agent plays their turn for them, inside the live hotseat session. Civ 6 switches FireTuner off in hotseat, so the fork ships a tiny UI mod, **MCP Bridge**, through which the server drives the game instead (a command file the mod polls, replies through `Lua.log`; ~0.2 s per call, works everywhere the tuner does and in hotseat too):
 
 ```bash
-uv run python scripts/hotseat_standin.py to-single "POUNDMAKER 63 150 AD" --leader LEADER_POUNDMAKER
-#   load MCP_STANDIN_IN in the game, let the agent play; end_turn saves MCP_STANDIN_OUT
-uv run python scripts/hotseat_standin.py to-hotseat
-#   load the result via Multiplayer > Hotseat > Load Game and press End Turn
+uv run python scripts/install_bridge_mod.py   # once; then (re)start Civ 6 and the MCP server
 ```
 
-In stand-in mode `end_turn` never ends the turn, every tool refuses to act for any other player, the diary persists per game and player, and `run_lua` is removed. Full workflow, guarantees and limitations: [docs/hotseat-standin.md](docs/hotseat-standin.md).
+When the turn-change screen shows the absent player's name, tell the agent "take Poundmaker's turn" (plus whatever that player asked for). It calls `begin_standin_turn`, plays with the normal tools, and `end_turn` ends the turn for real, hands the game to the next player's turn-change screen and saves there. From the main menu, `load_hotseat_save` opens a hotseat save by itself.
+
+Every game tool is locked in a hotseat session until a stand-in is armed, refuses to act for any other player afterwards, the diary persists per game and player, and `run_lua` is removed. Full workflow, guarantees and limitations: [docs/hotseat-standin.md](docs/hotseat-standin.md). The older single-player-copy detour (`scripts/hotseat_standin.py`) still works where the mod cannot be used.
 
 ## Quick start
 
@@ -71,7 +70,8 @@ Enable the FireTuner debug interface and configure recommended settings:
 **The Civ 6 SDK is not required** — the tuner server is built into the game; `EnableTuner 1` (the in-game "Tuner" option) is enough. Install the SDK only if you want its FireTuner GUI.
 
 **Important notes:**
-- The tuner is **disabled in multiplayer, including local hotseat**. See `docs/hotseat-standin.md` for playing a hotseat player's turn through a single-player copy of the save.
+- The tuner is **disabled in multiplayer, including local hotseat**. Install the MCP Bridge mod (`uv run python scripts/install_bridge_mod.py`) and the server drives the game through it instead; see `docs/hotseat-standin.md`.
+- A second monitor is fine: OCR captures the game window itself (not the primary screen) and clicks are mapped over the whole virtual desktop. Keep the game on one monitor and don't move it mid-session.
 - Close `FireTuner.exe` (the SDK's GUI tool) before running civ6-mcp — the game only allows **one** tuner connection at a time
 - Do **not** run from WSL — the network bridging between WSL2 and Windows is unreliable and the tuner server locks up after failed connections
 - If the connection fails, **restart the game** — the tuner often hangs after a bad handshake and won't recover until the process is recycled

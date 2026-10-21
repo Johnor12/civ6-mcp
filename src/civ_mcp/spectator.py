@@ -198,6 +198,13 @@ class PopupWatcher:
     def __init__(self, conn: "GameConnection") -> None:
         self._conn = conn
         self._task: asyncio.Task | None = None
+        # The file-based bridge costs a disk write and a few log lines per
+        # poll, and its replies take ~0.2 s; poll it less eagerly.
+        self.poll_interval = (
+            2.0
+            if getattr(conn, "transport_name", "tuner") == "bridge"
+            else POPUP_POLL_INTERVAL
+        )
 
     def start(self) -> None:
         self._task = asyncio.create_task(self._run(), name="popup-watcher")
@@ -265,7 +272,7 @@ class PopupWatcher:
         _iteration = 0
 
         while True:
-            await asyncio.sleep(POPUP_POLL_INTERVAL)
+            await asyncio.sleep(self.poll_interval)
             _iteration += 1
             try:
                 status = await self._poll()

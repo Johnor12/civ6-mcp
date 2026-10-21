@@ -8,13 +8,19 @@ An MCP server connecting to a live Civilization VI game via FireTuner. You can r
 
 ## Hotseat Stand-In Mode
 
-This fork is used to play an absent player's turn in a local hotseat game. The game disables FireTuner in hotseat sessions, so the turn is played in a single-player copy of the hotseat save (see `docs/hotseat-standin.md`). When `get_game_overview` prints a **STAND-IN MODE** paragraph:
+This fork is used to play an absent player's turn in a local hotseat game, inside the live session (the MCP Bridge mod replaces FireTuner there; see `docs/hotseat-standin.md`). The operator says something like "take Poundmaker's turn" and passes on what that player asked for.
+
+1. `hotseat_status` — where the game is and whose turn-change screen is up. In a hotseat session every other game tool is locked until step 2. If the game is at the main menu, `load_hotseat_save(name)` opens the save and ends on the turn-change screen.
+2. `begin_standin_turn(leader, note)` — takes that player's seat (presses Start Turn for them) and arms stand-in mode. It refuses if the screen shows someone else: never try to play a different player than the one the operator named.
+3. `get_diary` — this player's memory from earlier stand-ins — then the normal turn loop.
+4. `end_turn` exactly once when the turn is done. It checks everything a real end turn checks, refuses while any unit still needs orders, then ends the turn for real, waits for the next human's turn-change screen and saves there. After it reports TURN ENDED every game tool is locked again; stop. Never load other saves or "continue".
+
+While the **STAND-IN MODE** paragraph shows in `get_game_overview`:
 
 - You control exactly one civilization — the leader named there. Every other major civilization is a human being who plays their own turns later. Treat them as humans: trade and diplomacy proposals get answered on their turn, `propose_trade(mode="test")` says nothing about what a human accepts, and leader "agendas" and AI relationship modifiers are meaningless.
-- Start with `get_diary`: the diary for this player persists across sessions and holds what you (or the human) did and planned before. The player's note in the stand-in paragraph is the instruction to follow.
-- `end_turn` does **not** advance the game. It checks everything a real end turn would check, refuses while any unit still has moves, then saves the finished turn. Call it exactly once when the turn is done; if it reports a blocker, resolve it and call again. Never try to load other saves or to "continue" after it reports TURN FINISHED.
-- Play the civilization the way its owner would: steady, no gambits they did not ask for, no wars or peace deals unless the note says so. When in doubt, leave a clear diary entry about what you did and why.
+- The player's note is the instruction to follow. Play the civilization the way its owner would: steady, no gambits they did not ask for, no wars or peace deals unless the note says so. When in doubt, leave a clear diary entry about what you did and why.
 - You only see what this player can see. Do not try to work around that.
+- A STAND-IN MODE paragraph that says "single-player detour" is the legacy path: there `end_turn` only finishes and saves the turn, and the operator converts the save back by hand.
 
 ## Coordinate System
 

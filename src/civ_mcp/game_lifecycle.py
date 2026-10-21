@@ -532,13 +532,31 @@ async def load_game_save(conn: GameConnection, save_name: str) -> str:
     import asyncio
     import sys
 
+    # Through the MCP Bridge the Lua runs in whichever UI context is alive
+    # (front end at the main menu, InGame in a game); there is no OCR
+    # fallback, and never a game restart — the game may be a hotseat
+    # session people are playing in.
+    using_bridge = getattr(conn, "transport_name", "tuner") == "bridge"
+    if using_bridge:
+        where = await conn.where(timeout=3.0)
+        if where is None:
+            return "Error: the game did not answer (loading, or the MCP Bridge mod is not active)."
+
+    async def _run_lua(code: str) -> list[str]:
+        if using_bridge:
+            from civ_mcp.bridge import CONTEXT_FRONTEND, CONTEXT_INGAME
+
+            ctx = CONTEXT_FRONTEND if where == "frontend" else CONTEXT_INGAME
+            return await conn.execute_in_context(ctx, code)
+        return await conn.execute_write(code)
+
     # On the Aspyr Linux port, Network.LoadGame silently does nothing
     # (same as Network.SaveGame). Skip Lua tier and go straight to OCR
     # menu navigation which actually works.
     if sys.platform != "linux":
         # Tier 1: Lua query-match-load (Windows/macOS only)
         try:
-            await conn.execute_write(
+            await _run_lua(
                 f"if not ExposedMembers then ExposedMembers = {{}} end; "
                 f"ExposedMembers.MCPLoadResult = nil; "
                 f"ExposedMembers.MCPLoadDone = false; "
@@ -567,7 +585,7 @@ async def load_game_save(conn: GameConnection, save_name: str) -> str:
 
             for _ in range(20):
                 await asyncio.sleep(0.25)
-                check = await conn.execute_write(
+                check = await _run_lua(
                     f"if ExposedMembers.MCPLoadDone then "
                     f'  print("RESULT|" .. tostring(ExposedMembers.MCPLoadResult)) '
                     f'else print("PENDING") end; '
@@ -613,6 +631,12 @@ async def load_game_save(conn: GameConnection, save_name: str) -> str:
     # restarting. Only restart_and_load if we're in-game.
     from . import game_launcher
 
+    if using_bridge:
+        return (
+            f"Error: the game's save list does not contain '{save_name}' although "
+            "the file exists (autosaves and quicksaves are listed under their own "
+            "names). Not restarting the game. Check the name with list_saves."
+        )
     if conn.gamecore_index is None:
         log.info("At main menu — loading '%s' via OCR menu nav", save_name)
         return await game_launcher.load_save_from_menu(save_name)

@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Mod id="7c1f2a3e-5b6d-4e8f-9a0b-c1d2e3f4a5b6" version="2">
+	<Properties>
+		<Name>MCP Bridge</Name>
+		<Teaser>civ6-mcp command bridge (FireTuner replacement that also works in hotseat)</Teaser>
+		<Description>Polls a command file written by the civ6-mcp server and runs it inside the game's UI Lua state, printing the results to Lua.log. Pure UI: it changes no rules and no saved games.</Description>
+		<Authors>civ6-mcp</Authors>
+		<AffectsSavedGames>0</AffectsSavedGames>
+		<SupportsSinglePlayer>1</SupportsSinglePlayer>
+		<SupportsMultiplayer>1</SupportsMultiplayer>
+		<CompatibleVersions>1.2,2.0</CompatibleVersions>
+	</Properties>
+	<!-- The front end does not load mod-added UI contexts (only InGame.lua
+	     does), so the bridge rides on the base game's "Test" context, which
+	     FrontEnd.xml loads at the main menu and keeps alive in the staging
+	     room: importing a file called Test.lua shadows the empty original. -->
+	<FrontEndActions>
+		<ImportFiles id="MCPBridge_FE_Files">
+			<File>UI/mcp_bridge_cmd.lua</File>
+			<File>UI/MCPBridgeCore.lua</File>
+			<File>UI/Test.lua</File>
+		</ImportFiles>
+	</FrontEndActions>
+	<InGameActions>
+		<ImportFiles id="MCPBridge_IG_Files">
+			<File>UI/mcp_bridge_cmd.lua</File>
+			<File>UI/MCPBridgeCore.lua</File>
+		</ImportFiles>
+		<AddUserInterfaces id="MCPBridge_IG_UI">
+			<Properties>
+				<Context>InGame</Context>
+			</Properties>
+			<File>UI/MCPBridge_InGame.xml</File>
+		</AddUserInterfaces>
+	</InGameActions>
+	<Files>
+		<File>UI/MCPBridgeCore.lua</File>
+		<File>UI/MCPBridge_InGame.xml</File>
+		<File>UI/MCPBridge_InGame.lua</File>
+		<File>UI/Test.lua</File>
+		<File>UI/mcp_bridge_cmd.lua</File>
+	</Files>
+</Mod>

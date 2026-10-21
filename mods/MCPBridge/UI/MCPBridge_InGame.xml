@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Empty context: the bridge draws nothing. It is shown (SetHide(false))
+     only because hidden contexts receive no update ticks. -->
+<Context Name="MCPBridge_InGame" />

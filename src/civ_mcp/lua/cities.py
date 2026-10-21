@@ -524,10 +524,11 @@ print("{SENTINEL}")
 
 
 def build_verify_production(city_id: int, item_name: str) -> str:
-    """GameCore readback: verify production was set after RequestOperation.
+    """Readback: verify production was set after RequestOperation.
 
-    Uses CurrentlyBuilding() (GameCore) instead of GetCurrentProductionTypeHash()
-    which is InGame-only and returns nil in GameCore context.
+    GameCore has CurrentlyBuilding() (a type name); the InGame/UI state —
+    where the MCP Bridge runs everything — only has
+    GetCurrentProductionTypeHash(), so the hash is compared there.
     """
     return f"""
 local me = Game.GetLocalPlayer()
@@ -535,7 +536,23 @@ local pCity = Players[me]:GetCities():FindID({city_id} % 65536)
 if pCity == nil then print("NOT_FOUND"); print("{SENTINEL}"); return end
 local bq = pCity:GetBuildQueue()
 local ok, cur = pcall(function() return bq:CurrentlyBuilding() end)
-if not ok then print("NOT_SET|readback_error"); print("{SENTINEL}"); return end
+if not ok or cur == nil then
+    local okH, hash = pcall(function() return bq:GetCurrentProductionTypeHash() end)
+    if not okH then print("NOT_SET|readback_error"); print("{SENTINEL}"); return end
+    local want = nil
+    for _, t in ipairs({{GameInfo.Units, GameInfo.Buildings, GameInfo.Districts, GameInfo.Projects}}) do
+        local row = t["{item_name}"]
+        if row ~= nil then want = row.Hash break end
+    end
+    if want ~= nil and hash == want then
+        local okT, turns = pcall(function() return bq:GetTurnsLeft() end)
+        print("CONFIRMED|" .. (okT and tostring(turns) or "?") .. " turns")
+    else
+        print("NOT_SET|current_hash=" .. tostring(hash) .. "|expected={item_name}")
+    end
+    print("{SENTINEL}")
+    return
+end
 if cur == "{item_name}" then
     local okT, turns = pcall(function() return bq:GetTurnsLeft() end)
     print("CONFIRMED|" .. (okT and tostring(turns) or "?") .. " turns")

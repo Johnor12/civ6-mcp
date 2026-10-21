@@ -20,8 +20,10 @@ import uvicorn
 from mcp.server.fastmcp import Context, FastMCP
 
 from civ_mcp import game_launcher, heartbeat
+from civ_mcp import bridge as _bridge
+from civ_mcp import hotseat as _hotseat
 from civ_mcp import standin as _standin
-from civ_mcp.end_turn import execute_finish_turn
+from civ_mcp.end_turn import execute_finish_turn, execute_hotseat_end_turn
 from civ_mcp.game_over_watchdog import GameOverWatchdog
 from civ_mcp import narrate as nr
 from civ_mcp.connection import GameConnection, LuaError
@@ -287,9 +289,26 @@ async def _auto_boot(conn: GameConnection, save_name: str) -> None:
         log.debug("Auto-boot: save verification failed", exc_info=True)
 
 
+def _make_connection():
+    """Pick the game transport.
+
+    CIV_MCP_TRANSPORT=tuner  — FireTuner TCP (single-player only)
+    CIV_MCP_TRANSPORT=bridge — the MCP Bridge mod (works in hotseat too)
+    unset / auto             — the bridge whenever the mod is installed
+    """
+    mode = os.environ.get("CIV_MCP_TRANSPORT", "auto").strip().lower()
+    if mode == "bridge" or (mode == "auto" and _bridge.is_mod_installed()):
+        log.info("Transport: MCP Bridge mod (%s)", _bridge.installed_mod_dir())
+        return _bridge.BridgeConnection()
+    if mode not in ("auto", "tuner"):
+        log.warning("Unknown CIV_MCP_TRANSPORT=%r, using the tuner", mode)
+    log.info("Transport: FireTuner")
+    return GameConnection()
+
+
 @asynccontextmanager
 async def lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
-    conn = GameConnection()
+    conn = _make_connection()
 
     # Telemetry emitter — routes events to local JSONL + optional cloud sink
     emitter = TelemetryEmitter()
@@ -300,13 +319,22 @@ async def lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
     alert_webhook = os.environ.get("CIV_MCP_ALERT_WEBHOOK")
     if alert_webhook:
         emitter.add_sink(AlertSink(alert_webhook))
-    # Hotseat stand-in mode (see standin.py): a stable run id so the diary
-    # for this game + player persists across Claude sessions.
+    # Hotseat stand-in (see standin.py): a stable run id so the diary for a
+    # game + player persists across Claude sessions. Any sign that this
+    # install plays stand-in turns (a marker file, the bridge mod, or
+    # CIV_MCP_STANDIN=1) pins the id before the emitter starts.
     _standin_cfg = _standin.active_config()
-    if _standin_cfg is not None:
+    if (
+        _standin_cfg is not None
+        or _standin.marker_exists()
+        or os.environ.get("CIV_MCP_STANDIN") == "1"
+        or getattr(conn, "transport_name", "tuner") == "bridge"
+    ):
         os.environ.setdefault("CIV_MCP_RUN_ID", _standin.STANDIN_RUN_ID)
+    if _standin_cfg is not None:
         log.info(
-            "Stand-in mode active: playing %s (from hotseat save %r)",
+            "Stand-in mode active (%s): playing %s (from hotseat save %r)",
+            _standin_cfg.mode,
             _standin_cfg.leader,
             _standin_cfg.hotseat_save,
         )
@@ -421,6 +449,9 @@ _STANDIN_UNGUARDED = frozenset(
         "kill_game",
         "restart_and_load",
         "dismiss_popup",
+        "hotseat_status",
+        "load_hotseat_save",
+        "begin_standin_turn",
     }
 )
 
@@ -456,11 +487,19 @@ async def _logged(
     logger = _get_logger(ctx)
     turn = logger._turn or "?"
     standin_cfg = _standin.active_config()
-    if standin_cfg is not None and tool_name not in _STANDIN_UNGUARDED:
+    conn = _get_game(ctx).conn
+    using_bridge = getattr(conn, "transport_name", "tuner") == "bridge"
+    # The guard runs for every game tool while a stand-in marker is active,
+    # and — on the bridge, where a hotseat session is reachable at all — also
+    # without one, so a hotseat game is never touched before
+    # begin_standin_turn names the absent player.
+    if tool_name not in _STANDIN_UNGUARDED and (
+        standin_cfg is not None or using_bridge
+    ):
         try:
-            refusal = await _get_standin_guard(ctx).check(
-                _get_game(ctx).conn, standin_cfg
-            )
+            refusal = await _get_standin_guard(ctx).check(conn, standin_cfg)
+        except ConnectionError as e:
+            refusal = str(e)
         except Exception as e:  # noqa: BLE001 — refuse rather than act blind
             refusal = f"Stand-in guard: could not verify the local player ({e})."
         if refusal:
@@ -499,11 +538,13 @@ async def _logged(
         # Connection-loss recovery: after consecutive failures,
         # the game has likely crashed. Auto-restart from autosave.
         _logged._conn_errors = getattr(_logged, "_conn_errors", 0) + 1
-        if _logged._conn_errors >= 5 and standin_cfg is not None:
-            # Never kill or relaunch the game client on the players' behalf.
+        if _logged._conn_errors >= 5 and (standin_cfg is not None or using_bridge):
+            # Never kill or relaunch the game client on the players' behalf:
+            # on the bridge the game is usually a hotseat session people are
+            # playing in, and a silent bridge just means it is loading.
             log.error(
-                "CONNECTION RECOVERY skipped in stand-in mode after %d failures "
-                "- check that the converted single-player save is loaded",
+                "CONNECTION RECOVERY skipped (stand-in/bridge) after %d failures "
+                "- check that the game is loaded and the MCP Bridge mod is active",
                 _logged._conn_errors,
             )
             _logged._conn_errors = 0
@@ -2001,8 +2042,51 @@ async def end_turn(
             except Exception:
                 log.warning("Diary: failed to write entry", exc_info=True)
 
-    # Stand-in mode: finish the turn and save; never send ACTION_ENDTURN,
-    # because the other civilizations belong to human hotseat players.
+    # Stand-in, hotseat mode: really end the turn through the bridge, wait for
+    # the next human's turn-change screen and save there. The marker stays
+    # active with finished_turn set, so every game tool is refused until
+    # begin_standin_turn is called for the next absent player.
+    if standin_cfg is not None and standin_cfg.is_hotseat_mode:
+        if standin_cfg.finished_turn is not None:
+            return (
+                "This stand-in turn was already ended "
+                f"(turn {standin_cfg.finished_turn}, saved as "
+                f"'{standin_cfg.finished_save}'). Nothing to do."
+            )
+        result = await _logged(
+            ctx,
+            "end_turn",
+            {},
+            lambda: execute_hotseat_end_turn(gs, standin_cfg.leader),
+        )
+        if "\n__NEXT__|" in result:
+            result, meta = result.rsplit("\n__NEXT__|", 1)
+            next_leader, next_name, save_name, ended_turn = (
+                meta.split("|") + [""] * 4
+            )[:4]
+            gs._end_turn_blocked = False
+            _get_standin_guard(ctx).invalidate()
+            try:
+                standin_cfg.finished_turn = (
+                    int(ended_turn) if ended_turn.isdigit() else (_diary_turn or None)
+                )
+                standin_cfg.finished_at = datetime.now(timezone.utc).isoformat(
+                    timespec="seconds"
+                )
+                standin_cfg.finished_save = save_name
+                standin_cfg.next_player = (
+                    f"{next_leader.replace('LEADER_', '').replace('_', ' ').title()} "
+                    f"('{next_name}')"
+                )
+                _standin.save_config(standin_cfg)
+            except Exception:
+                log.debug("Could not update stand-in marker", exc_info=True)
+        else:
+            gs._end_turn_blocked = True  # a retry merges its reflections
+        return result
+
+    # Stand-in, single-player detour: finish the turn and save; never send
+    # ACTION_ENDTURN, because the other civilizations belong to human players.
     if standin_cfg is not None:
         out_save = standin_cfg.out_save or _standin.DEFAULT_OUT_SAVE
         result = await _logged(
@@ -2979,6 +3063,161 @@ async def restart_and_load(ctx: Context, save_name: str | None = None) -> str:
     return result
 
 
+# ---------------------------------------------------------------------------
+# Hotseat stand-in (through the MCP Bridge mod)
+# ---------------------------------------------------------------------------
+
+_NO_BRIDGE = (
+    "This needs the MCP Bridge transport: run "
+    "`uv run python scripts/install_bridge_mod.py`, restart Civ 6, then restart "
+    "the MCP server (CIV_MCP_TRANSPORT unset or 'bridge')."
+)
+
+
+def _bridge_conn(ctx: Context) -> _bridge.BridgeConnection | None:
+    conn = _get_game(ctx).conn
+    return conn if getattr(conn, "transport_name", "tuner") == "bridge" else None
+
+
+@mcp.tool(annotations={"readOnlyHint": True})
+async def hotseat_status(ctx: Context) -> str:
+    """Where the game is and whose turn it is, plus the stand-in marker state.
+
+    Safe to call anywhere: main menu, staging room, in a game. Reports the
+    local player, whether the turn-change screen is showing, and whether a
+    stand-in is armed. Call it before begin_standin_turn, and whenever a tool
+    is refused by the stand-in guard.
+    """
+    conn = _bridge_conn(ctx)
+    if conn is None:
+        return _NO_BRIDGE
+    st = await _hotseat.status(conn)
+    text = st.describe()
+    cfg = _standin.load_config()
+    if cfg is not None and cfg.active:
+        text += "\n\n" + _standin.status_text(cfg)
+    elif st.screen == "ingame" and st.is_hotseat:
+        text += (
+            "\n\nNo stand-in is armed: game tools are locked. Call "
+            "begin_standin_turn(leader) for the player whose turn this is."
+        )
+    return text
+
+
+@mcp.tool(annotations={"destructiveHint": True})
+async def load_hotseat_save(ctx: Context, save_name: str) -> str:
+    """Load a hotseat save and start it, ending on its turn-change screen.
+
+    Works from the main menu or from inside another game (that game is left
+    WITHOUT saving). Goes Multiplayer > Hotseat > Load Game > Start Game by
+    itself and returns when the "<name>: Save Game / Start Turn" screen of
+    the player whose turn it is comes up (about a minute for a big save).
+    Then call begin_standin_turn for that player.
+
+    Args:
+        save_name: Name in the hotseat save folder, without extension,
+                   e.g. "POUNDMAKER 63 150 AD". list_saves shows them with
+                   a [hotseat] tag.
+    """
+    conn = _bridge_conn(ctx)
+    if conn is None:
+        return _NO_BRIDGE
+    try:
+        result = await _hotseat.load_hotseat_save(conn, save_name)
+    except (ConnectionError, RuntimeError) as e:
+        return f"Error: {e}"
+    _get_standin_guard(ctx).invalidate()
+    cfg = _standin.load_config()
+    if cfg is not None:
+        cfg.hotseat_save = save_name
+        try:
+            _standin.save_config(cfg)
+        except Exception:
+            log.debug("Could not update stand-in marker", exc_info=True)
+    return (
+        result + "\nNext: begin_standin_turn(leader) for the absent player named on "
+        "the turn-change screen."
+    )
+
+
+@mcp.tool()
+async def begin_standin_turn(ctx: Context, leader: str, note: str = "") -> str:
+    """Take the seat of one absent hotseat player for this turn.
+
+    Checks that the game is in a hotseat session and that it is this
+    leader's turn, presses Start Turn for them (dismisses the turn-change
+    screen and unpauses), and arms stand-in mode: from now on every game
+    tool acts for this player only, and end_turn ends the turn for real,
+    hands the game to the next human's turn-change screen and saves there.
+
+    Args:
+        leader: The absent player's leader, e.g. "Poundmaker" or
+                "LEADER_POUNDMAKER" (as shown by hotseat_status).
+        note: What the absent player asked for this turn, in their words.
+
+    Start the turn with get_diary (the player's memory from earlier
+    stand-ins), then get_game_overview.
+    """
+    conn = _bridge_conn(ctx)
+    if conn is None:
+        return _NO_BRIDGE
+    lid = _hotseat.normalize_leader(leader)
+    st = await _hotseat.status(conn)
+    if st.screen != "ingame":
+        return f"Cannot begin: {st.describe()} Use load_hotseat_save first."
+    if not st.is_hotseat:
+        return (
+            "Cannot begin: this is not a hotseat session. Use load_hotseat_save "
+            "to open the hotseat save (or scripts/hotseat_standin.py for the "
+            "single-player detour)."
+        )
+    if st.leader != lid:
+        return (
+            f"Cannot begin: the game is on {st.leader}'s turn ('{st.player_name}'), "
+            f"not {lid}'s. If that player is the absent one, call begin_standin_turn "
+            "with their leader; otherwise the humans play up to the absent "
+            "player's turn first."
+        )
+    if not st.turn_active:
+        return f"Cannot begin: {lid}'s turn is not active (already ended?)."
+    if st.player_change_visible:
+        st = await _hotseat.accept_turn(conn)
+
+    cfg = _standin.load_config() or _standin.StandinConfig()
+    cfg.active = True
+    cfg.mode = _standin.MODE_HOTSEAT
+    cfg.leader = lid
+    cfg.player_name = st.player_name
+    cfg.note = note or ""
+    cfg.started_turn = st.turn
+    cfg.started_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    cfg.finished_turn = None
+    cfg.finished_at = ""
+    cfg.finished_save = ""
+    cfg.next_player = ""
+    _standin.save_config(cfg)
+    _get_standin_guard(ctx).invalidate()
+    gs = _get_game(ctx)
+    gs._end_turn_blocked = False
+    gs._last_snapshot = None  # the next overview re-baselines the turn diff
+
+    warn = ""
+    if _get_logger(ctx).session_id != _standin.STANDIN_RUN_ID:
+        warn = (
+            "\nWARNING: this server session's diary run id is not 'standin', so "
+            "get_diary will not see earlier stand-in entries. Restart the MCP "
+            "server before the next turn."
+        )
+    return (
+        f"Stand-in armed for {cfg.leader_display} ('{st.player_name}'), turn "
+        f"{st.turn}. The turn-change screen was dismissed and the game is "
+        "unpaused; it is this player's turn.\n"
+        + _standin.status_text(cfg)
+        + warn
+        + "\nStart with get_diary, then get_game_overview."
+    )
+
+
 async def _narrate(
     query_fn: Callable[[], Awaitable[Any]], narrate_fn: Callable[..., str]
 ) -> str:
@@ -3004,11 +3243,17 @@ def main():
             signal.SIGTERM, lambda sig, frame: os.kill(os.getpid(), signal.SIGINT)
         )
 
+    transport = os.environ.get("CIV_MCP_TRANSPORT", "auto").strip().lower()
+    bridge_in_use = transport == "bridge" or (
+        transport == "auto" and _bridge.is_mod_installed()
+    )
     if os.environ.get("CIV_MCP_DISABLE_LUA") or (
-        _standin.active_config() is not None
+        (_standin.active_config() is not None or bridge_in_use)
         and not os.environ.get("CIV_MCP_STANDIN_ALLOW_LUA")
     ):
         # Arbitrary Lua could read any player's state - not for a stand-in.
+        # The bridge exists for hotseat stand-ins, so it implies the same rule
+        # (set CIV_MCP_STANDIN_ALLOW_LUA=1 to keep run_lua for debugging).
         mcp._tool_manager.remove_tool("run_lua")
 
     mcp.run(transport="stdio")

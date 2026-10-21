@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 """Convert a hotseat save into a single-player save for the stand-in agent, and back.
 
-FireTuner (the only way civ6-mcp can talk to the game) shuts down as soon as
-Civ 6 enters a hotseat session, so the MCP server cannot play a hotseat turn
-directly.  The workaround is a detour through single-player mode:
+LEGACY DETOUR. The MCP Bridge mod (scripts/install_bridge_mod.py) lets the
+server play inside the live hotseat session — see docs/hotseat-standin.md.
+This script remains for machines where the mod cannot be used.
+
+FireTuner shuts down as soon as Civ 6 enters a hotseat session, so without
+the bridge the MCP server cannot play a hotseat turn directly.  The
+workaround is a detour through single-player mode:
 
     hotseat save  --to-single-->  single-player save (one human, rest AI)
                                        |
@@ -40,6 +44,7 @@ sys.path.insert(0, "src")
 from civ_mcp.game_launcher import HOTSEAT_SAVE_DIR, SINGLE_SAVE_DIR  # noqa: E402
 from civ_mcp.standin import (  # noqa: E402
     DEFAULT_OUT_SAVE,
+    MODE_SINGLE,
     STANDIN_PATH,
     StandinConfig,
     load_config,
@@ -263,6 +268,7 @@ def cmd_to_single(args: argparse.Namespace) -> None:
         print("  " + c)
     cfg = StandinConfig(
         active=True,
+        mode=MODE_SINGLE,
         leader=args.leader,
         hotseat_save=src.stem,
         single_save=out.stem,

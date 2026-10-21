@@ -400,6 +400,16 @@ local canPromote = false
 pcall(function() canPromote = exp:CanPromote(promo.Index) end)
 if not canPromote then {_bail("ERR:CANNOT_PROMOTE|Unit cannot receive this promotion (wrong class, missing prereq, or insufficient XP)")} end
 if exp:HasPromotion(promo.Index) then {_bail(f"ERR:ALREADY_HAS_PROMOTION|{promotion_type}")} end
+if exp.SetPromotion == nil then
+    -- UI state (MCP Bridge): no SetPromotion; ask the engine the way the
+    -- unit panel does. The command is processed asynchronously.
+    local tParameters = {{}}
+    tParameters[UnitCommandTypes.PARAM_PROMOTION_TYPE] = promo.Hash
+    UnitManager.RequestCommand(unit, UnitCommandTypes.PROMOTE, tParameters)
+    print("OK:PROMOTE_REQUESTED|" .. Locale.Lookup(promo.Name) .. "|check get_unit_promotions")
+    print("{SENTINEL}")
+    return
+end
 exp:SetPromotion(promo.Index)
 if not exp:HasPromotion(promo.Index) then {_bail("ERR:PROMOTION_FAILED|SetPromotion did not apply")} end
 -- Sync engine state: zero out stored promotions so the engine stops

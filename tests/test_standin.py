@@ -169,6 +169,7 @@ class TestMarker:
     def test_status_text_mentions_note_and_finish(self):
         cfg = standin.StandinConfig(
             active=True,
+            mode=standin.MODE_SINGLE,
             leader="LEADER_POUNDMAKER",
             hotseat_save="POUNDMAKER 63 150 AD",
             note="keep building campuses",
@@ -181,6 +182,35 @@ class TestMarker:
         assert "already finished" in text
         assert "end_turn will NOT advance" in text
 
+    def test_status_text_hotseat_mode(self):
+        cfg = standin.StandinConfig(
+            active=True,
+            leader="LEADER_POUNDMAKER",
+            player_name="Ray",
+            note="finish the campus",
+        )
+        text = standin.status_text(cfg)
+        assert "hotseat" in text and "Ray" in text and "finish the campus" in text
+        assert "ends the turn for real" in text
+        cfg.finished_turn = 63
+        cfg.finished_save = "BARBAROSSA 63 150 AD MCP"
+        cfg.next_player = "Barbarossa ('Aidan')"
+        text = standin.status_text(cfg)
+        assert "already ended" in text and "BARBAROSSA 63 150 AD MCP" in text
+        assert "Aidan" in text and "locked" in text
+
+    def test_mode_inferred_for_old_markers(self, tmp_path):
+        path = tmp_path / "standin.json"
+        path.write_text(
+            '{"active": true, "leader": "LEADER_POUNDMAKER", "single_save": "MCP_STANDIN_IN"}'
+        )
+        cfg = standin.load_config(path)
+        assert cfg is not None and cfg.mode == standin.MODE_SINGLE
+        assert not cfg.is_hotseat_mode
+        path.write_text('{"active": true, "leader": "LEADER_POUNDMAKER"}')
+        cfg = standin.load_config(path)
+        assert cfg is not None and cfg.is_hotseat_mode
+
 
 # ---------------------------------------------------------------------------
 # Guard
@@ -192,7 +222,7 @@ class _FakeConn:
         self.line = line
         self.calls = 0
 
-    async def execute_read(self, lua, timeout=5.0):
+    async def execute_write(self, lua, timeout=5.0):
         self.calls += 1
         return [self.line]
 
@@ -201,11 +231,19 @@ def _run(coro):
     return asyncio.new_event_loop().run_until_complete(coro)
 
 
-class TestGuard:
+# LEADER|<slot>|<leader>|<any multiplayer>|<turn active>|<hotseat>
+_SP_POUNDMAKER = "LEADER|2|LEADER_POUNDMAKER|false|true|false"
+_HS_POUNDMAKER = "LEADER|2|LEADER_POUNDMAKER|true|true|true"
+_HS_ALEXANDER = "LEADER|0|LEADER_ALEXANDER|true|true|true"
+
+
+class TestGuardSingleMode:
     def test_passes_and_caches(self):
         guard = standin.StandinGuard()
-        cfg = standin.StandinConfig(active=True, leader="LEADER_POUNDMAKER")
-        conn = _FakeConn("LEADER|2|LEADER_POUNDMAKER|false|true")
+        cfg = standin.StandinConfig(
+            active=True, mode=standin.MODE_SINGLE, leader="LEADER_POUNDMAKER"
+        )
+        conn = _FakeConn(_SP_POUNDMAKER)
         assert _run(guard.check(conn, cfg)) is None
         assert _run(guard.check(conn, cfg)) is None
         assert conn.calls == 1  # second call served from the cache
@@ -213,9 +251,12 @@ class TestGuard:
     def test_refuses_other_player(self):
         guard = standin.StandinGuard()
         cfg = standin.StandinConfig(
-            active=True, leader="LEADER_POUNDMAKER", single_save="X"
+            active=True,
+            mode=standin.MODE_SINGLE,
+            leader="LEADER_POUNDMAKER",
+            single_save="X",
         )
-        conn = _FakeConn("LEADER|0|LEADER_ALEXANDER|false|true")
+        conn = _FakeConn("LEADER|0|LEADER_ALEXANDER|false|true|false")
         msg = _run(guard.check(conn, cfg))
         assert msg and "LEADER_ALEXANDER" in msg and "Refusing" in msg
         assert _run(guard.check(conn, cfg)) is not None
@@ -223,10 +264,76 @@ class TestGuard:
 
     def test_refuses_multiplayer_session(self):
         guard = standin.StandinGuard()
-        cfg = standin.StandinConfig(active=True, leader="LEADER_POUNDMAKER")
-        conn = _FakeConn("LEADER|2|LEADER_POUNDMAKER|true|true")
+        cfg = standin.StandinConfig(
+            active=True, mode=standin.MODE_SINGLE, leader="LEADER_POUNDMAKER"
+        )
+        conn = _FakeConn(_HS_POUNDMAKER)
         msg = _run(guard.check(conn, cfg))
         assert msg and "multiplayer/hotseat" in msg
+
+    def test_old_five_field_probe_still_parses(self):
+        guard = standin.StandinGuard()
+        cfg = standin.StandinConfig(
+            active=True, mode=standin.MODE_SINGLE, leader="LEADER_POUNDMAKER"
+        )
+        conn = _FakeConn("LEADER|2|LEADER_POUNDMAKER|false|true")
+        assert _run(guard.check(conn, cfg)) is None
+
+
+class TestGuardHotseatMode:
+    def test_passes_on_own_turn(self):
+        guard = standin.StandinGuard()
+        cfg = standin.StandinConfig(active=True, leader="LEADER_POUNDMAKER")
+        conn = _FakeConn(_HS_POUNDMAKER)
+        assert _run(guard.check(conn, cfg)) is None
+        assert _run(guard.check(conn, cfg)) is None
+        assert conn.calls == 1
+
+    def test_refuses_next_player_after_turn_ended(self):
+        guard = standin.StandinGuard()
+        cfg = standin.StandinConfig(
+            active=True,
+            leader="LEADER_POUNDMAKER",
+            finished_turn=63,
+            finished_save="BARBAROSSA 63 150 AD MCP",
+        )
+        conn = _FakeConn(_HS_ALEXANDER)
+        msg = _run(guard.check(conn, cfg))
+        assert msg and "LEADER_ALEXANDER" in msg and "Refusing" in msg
+        assert "already ended" in msg and "begin_standin_turn" in msg
+
+    def test_refuses_outside_hotseat(self):
+        guard = standin.StandinGuard()
+        cfg = standin.StandinConfig(active=True, leader="LEADER_POUNDMAKER")
+        conn = _FakeConn(_SP_POUNDMAKER)
+        msg = _run(guard.check(conn, cfg))
+        assert msg and "not in a hotseat session" in msg
+
+    def test_refuses_when_turn_not_active(self):
+        guard = standin.StandinGuard()
+        cfg = standin.StandinConfig(active=True, leader="LEADER_POUNDMAKER")
+        conn = _FakeConn("LEADER|2|LEADER_POUNDMAKER|true|false|true")
+        msg = _run(guard.check(conn, cfg))
+        assert msg and "not active" in msg
+
+    def test_no_marker_locks_hotseat_but_not_single_player(self):
+        guard = standin.StandinGuard()
+        conn = _FakeConn(_HS_ALEXANDER)
+        msg = _run(guard.check(conn, None))
+        assert msg and "begin_standin_turn" in msg and "LEADER_ALEXANDER" in msg
+        conn2 = _FakeConn(_SP_POUNDMAKER)
+        assert _run(guard.check(conn2, None)) is None
+        assert _run(guard.check(conn2, None)) is None
+        assert conn2.calls == 1
+
+    def test_cache_is_per_leader(self):
+        guard = standin.StandinGuard()
+        conn = _FakeConn(_HS_POUNDMAKER)
+        cfg = standin.StandinConfig(active=True, leader="LEADER_POUNDMAKER")
+        assert _run(guard.check(conn, cfg)) is None
+        other = standin.StandinConfig(active=True, leader="LEADER_ALEXANDER")
+        assert _run(guard.check(conn, other)) is not None
+        assert conn.calls == 2
 
 
 # ---------------------------------------------------------------------------

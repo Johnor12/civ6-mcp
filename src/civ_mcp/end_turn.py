@@ -930,8 +930,13 @@ async def _resolve_blockers(gs: GameState, turn_at_entry: int | None) -> str | N
                             f"  if u:GetX() ~= -9999 and u:GetMovesRemaining() > 0 then "
                             f"    anyMoves = true; break end end; "
                             f"if not anyMoves then "
+                            f"  local op = GameInfo.UnitOperations['UNITOPERATION_SKIP_TURN']; "
                             f"  for _, u in Players[me]:GetUnits():Members() do "
-                            f"    if u:GetX() ~= -9999 then UnitManager.FinishMoves(u) end "
+                            f"    if u:GetX() ~= -9999 then "
+                            f"      if UnitManager.FinishMoves then UnitManager.FinishMoves(u) "
+                            f"      elseif op and UnitManager.CanStartOperation(u, op.Hash, nil, nil) then "
+                            f"        UnitManager.RequestOperation(u, op.Hash) end "
+                            f"    end "
                             f'  end; print("AUTO_SKIPPED") '
                             f'else print("UNITS_NEED_ORDERS") end; '
                             f'print("{lq.SENTINEL}")'
@@ -1045,22 +1050,25 @@ async def execute_finish_turn(gs: GameState, out_save: str) -> str:
         return await _execute_finish_turn(gs, out_save)
 
 
-async def _execute_finish_turn(gs: GameState, out_save: str) -> str:
-    turn = await _get_turn_number(gs)
+async def _standin_preflight(gs: GameState, turn: int | None, verb: str) -> str | None:
+    """Everything a stand-in must settle before its turn may end.
 
+    Returns the refusal text, or None when the turn is ready to end. ``verb``
+    is "end" or "finish" (it only changes the wording).
+    """
     sessions = await gs.get_diplomacy_sessions()
     if sessions:
         names = ", ".join(
             f"{s.other_civ_name} ({s.other_leader_name})" for s in sessions
         )
         return (
-            f"Cannot finish turn: diplomacy encounter pending with {names}. "
+            f"Cannot {verb} turn: diplomacy encounter pending with {names}. "
             f"Use respond_to_diplomacy to handle it."
         )
     try:
         deals = await gs.get_pending_deals()
         if deals:
-            return "Cannot finish turn: incoming trade deal pending.\n" + (
+            return f"Cannot {verb} turn: incoming trade deal pending.\n" + (
                 nr.narrate_pending_deals(deals)
             )
     except Exception:
@@ -1069,26 +1077,33 @@ async def _execute_finish_turn(gs: GameState, out_save: str) -> str:
     try:
         pre_dismiss = await gs.dismiss_popup()
         if "Dismissed" in pre_dismiss:
-            log.info("Pre-finish popup dismissed: %s", pre_dismiss)
+            log.info("Pre-%s popup dismissed: %s", verb, pre_dismiss)
     except Exception:
-        log.debug("Pre-finish dismiss failed", exc_info=True)
+        log.debug("Pre-%s dismiss failed", verb, exc_info=True)
 
     blocker_msg = await _resolve_blockers(gs, turn)
     if blocker_msg is not None:
-        return blocker_msg.replace("Cannot end turn", "Cannot finish turn")
+        return blocker_msg.replace("Cannot end turn", f"Cannot {verb} turn")
 
     # Units with moves left are not a hard blocker for the engine (a human
     # could just press End Turn), but a stand-in must not leave a unit's
-    # turn unplayed by accident. Report them instead of saving.
+    # turn unplayed by accident. Report them instead of ending. "Idle" is
+    # what the game itself calls ready to move: awake, with moves, not on
+    # a route, not sleeping/sentried/fortified (IsReadyToMove; the older
+    # moves-and-not-fortified heuristic is the fallback where it is nil).
     try:
         idle_lines = await gs.conn.execute_read(
             "local me = Game.GetLocalPlayer() "
             "local idle = {} "
             "for _, u in Players[me]:GetUnits():Members() do "
-            "  if u:GetX() ~= -9999 and u:GetMovesRemaining() > 0 "
-            "     and u:GetFortifyTurns() == 0 then "
-            "    local e = GameInfo.Units[u:GetType()] "
-            '    table.insert(idle, (e and e.UnitType or "UNIT") .. "@" .. u:GetX() .. "," .. u:GetY() .. " (idx:" .. u:GetID() .. ")") '
+            "  if u:GetX() ~= -9999 and u:GetMovesRemaining() > 0 then "
+            "    local ready = nil "
+            "    pcall(function() ready = u:IsReadyToMove() end) "
+            "    if ready == nil then ready = (u:GetFortifyTurns() == 0) end "
+            "    if ready then "
+            "      local e = GameInfo.Units[u:GetType()] "
+            '      table.insert(idle, (e and e.UnitType or "UNIT") .. "@" .. u:GetX() .. "," .. u:GetY() .. " (idx:" .. u:GetID() .. ")") '
+            "    end "
             "  end "
             "end "
             'if #idle > 0 then print("IDLE|" .. table.concat(idle, "; ")) else print("NONE") end '
@@ -1099,11 +1114,88 @@ async def _execute_finish_turn(gs: GameState, out_save: str) -> str:
         )
         if idle:
             return (
-                "Cannot finish turn: these units still have moves — move, fortify, "
+                f"Cannot {verb} turn: these units still have moves — move, fortify, "
                 f"sleep or skip each one first: {idle}"
             )
     except Exception:
         log.debug("Idle unit check failed", exc_info=True)
+    return None
+
+
+async def execute_hotseat_end_turn(gs: GameState, leader: str) -> str:
+    """Hotseat stand-in: really end the turn, wait for the next player, save.
+
+    Same preflight as the single-player detour, then ACTION_ENDTURN through
+    the bridge. The call returns once the next human's turn-change screen is
+    up and the game has been saved there (``<LEADER> <turn> <year> MCP`` in
+    the hotseat save folder). Starts with ``TURN <n> ENDED`` on success.
+    """
+    from civ_mcp import hotseat
+
+    lock = getattr(gs.conn, "end_turn_lock", None)
+    if lock is None:
+        return await _execute_hotseat_end_turn(gs, leader, hotseat)
+    async with lock:
+        return await _execute_hotseat_end_turn(gs, leader, hotseat)
+
+
+async def _execute_hotseat_end_turn(gs: GameState, leader: str, hotseat) -> str:
+    conn = gs.conn
+    if getattr(conn, "transport_name", "tuner") != "bridge":
+        return (
+            "Cannot end turn: the hotseat stand-in needs the MCP Bridge transport "
+            "(install the mod and restart the server)."
+        )
+    st = await hotseat.ingame_status(conn)
+    if st.screen != "ingame" or not st.is_hotseat:
+        return "Cannot end turn: the game is not in a hotseat session."
+    if st.leader != leader:
+        return (
+            f"Cannot end turn: the game is on {st.leader}'s turn, not {leader}'s. "
+            "Nothing was done."
+        )
+    if not st.turn_active:
+        return f"Cannot end turn: {leader}'s turn is not active (already ended?)."
+
+    refusal = await _standin_preflight(gs, st.turn, "end")
+    if refusal is not None:
+        return refusal
+
+    try:
+        nxt = await hotseat.end_turn_and_wait(conn, st.local_player, st.turn)
+    except RuntimeError as e:
+        return f"Turn NOT ended — {e}"
+    save_name = await hotseat.suggest_save_name(conn)
+    try:
+        await hotseat.save_hotseat(conn, save_name)
+    except RuntimeError as e:
+        return (
+            f"TURN {st.turn} ENDED but the save failed ({e}). The game is on "
+            f"{nxt.leader_display}'s turn-change screen; save it by hand "
+            "(Save Game button)."
+        )
+    try:
+        gs._last_snapshot = await gs._take_snapshot()
+    except Exception:
+        log.debug("Post-end snapshot failed", exc_info=True)
+    turn_note = (
+        f"turn {nxt.turn} begins" if nxt.turn != st.turn else f"still turn {nxt.turn}"
+    )
+    return (
+        f"TURN {st.turn} ENDED for {st.leader_display}. The game is now on the "
+        f"turn-change screen of {nxt.leader_display} ('{nxt.player_name}', "
+        f"{turn_note}) and was saved as '{save_name}' in the hotseat save folder. "
+        "Stand-in finished: every game tool is locked until begin_standin_turn is "
+        "called again. Do not call end_turn again."
+    ) + f"\n__NEXT__|{nxt.leader}|{nxt.player_name}|{save_name}|{st.turn}"
+
+
+async def _execute_finish_turn(gs: GameState, out_save: str) -> str:
+    turn = await _get_turn_number(gs)
+
+    refusal = await _standin_preflight(gs, turn, "finish")
+    if refusal is not None:
+        return refusal
 
     save_result = await save_game(gs.conn, out_save)
     if not save_result.startswith("Saved"):
