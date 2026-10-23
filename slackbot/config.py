@@ -68,7 +68,8 @@ class Settings:
     approval_ttl_s: float = 30 * 60
     poll_interval_s: float = 30
     bare_mention_max_chars: int = 40
-    max_upload_mb: int = 200
+    shot_interval_s: float = 120  # mid-turn screenshot spacing
+    max_mid_shots: int = 2  # pre + mid + post = at most 4 images
     extra_env: dict[str, str] = field(default_factory=dict)
 
 
@@ -88,4 +89,6 @@ def settings_from_env(env: dict[str, str] | None = None) -> Settings:
         approvals_needed=int(e.get("CIV_APPROVALS_NEEDED", d.approvals_needed)),
         approval_ttl_s=float(e.get("CIV_APPROVAL_TTL_S", d.approval_ttl_s)),
         poll_interval_s=float(e.get("CIV_POLL_INTERVAL_S", d.poll_interval_s)),
+        shot_interval_s=float(e.get("CIV_SHOT_INTERVAL_S", d.shot_interval_s)),
+        max_mid_shots=int(e.get("CIV_MAX_MID_SHOTS", d.max_mid_shots)),
     )

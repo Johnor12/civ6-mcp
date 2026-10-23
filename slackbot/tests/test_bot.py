@@ -72,12 +72,6 @@ class FakeCapture:
     async def screenshot(self, label):
         return Path(f"/tmp/{label}.png")
 
-    async def start_recording(self):
-        pass
-
-    async def stop_recording(self):
-        return None
-
 
 class Clock:
     t = 1_000_000.0
@@ -292,3 +286,16 @@ def test_expired_request_closes_and_takeover_reopens():
     out = run(bot.handle_approve("UA", new_id))
     run(out.job)
     assert runner.calls == [("LEADER_CLEOPATRA", "go west")]
+
+
+def test_mid_turn_screenshots_are_capped_at_two():
+    async def scenario():
+        hold = asyncio.Event()
+        bot, slack, *_ = make(hold=hold, shot_interval_s=0.01, max_mid_shots=2)
+        task = asyncio.create_task(bot.handle_dm("UA", "go"))
+        await asyncio.sleep(0.2)
+        hold.set()
+        await task
+        return [t for _, t in slack.uploads]
+
+    assert run(scenario()) == ["pre", "mid1", "mid2", "post"]

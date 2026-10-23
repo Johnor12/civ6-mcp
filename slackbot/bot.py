@@ -145,21 +145,33 @@ class CivBot:
                 f"Claude is taking {msg.mention(player.slack_id)}'s turn ({player.leader}, {source}). "
                 "Please keep off the civ machine until it ends."
             )
-            pre = await self.capture.screenshot("pre")
-            await self.capture.start_recording()
+            shots: list[Path] = []
+            await self._shot(shots, "pre")
+            mid = asyncio.create_task(self._mid_shots(shots))
             try:
                 result = await self.runner.run(game.leader, note)
             except Exception as e:  # noqa: BLE001 - never leave the lock or the channel hanging
                 log.exception("run failed")
                 result = RunResult(False, f"Internal error: {e}")
             finally:
-                video = await self.capture.stop_recording()
-            post = await self.capture.screenshot("post")
+                mid.cancel()
+            await self._shot(shots, "post")
             self.store.log_run(player.slack_id, requested_by, source, note, result.ok, result.text)
-            await self._report(player, result, root, [p for p in (pre, post) if p], video)
+            await self._report(player, result, root, shots)
+
+    async def _shot(self, shots: list[Path], label: str) -> None:
+        path = await self.capture.screenshot(label)
+        if path is not None:
+            shots.append(path)
+
+    async def _mid_shots(self, shots: list[Path]) -> None:
+        """A few screenshots while the turn runs, spaced by shot_interval_s."""
+        for i in range(self.settings.max_mid_shots):
+            await asyncio.sleep(self.settings.shot_interval_s)
+            await self._shot(shots, f"mid{i + 1}")
 
     async def _report(
-        self, player: Player, result: RunResult, root: str, shots: list[Path], video: Path | None
+        self, player: Player, result: RunResult, root: str, shots: list[Path]
     ) -> None:
         pid = player.slack_id
         head = (
@@ -184,18 +196,10 @@ class CivBot:
                 f"civ machine.\n{msg.safe(result.text)[:500]}",
                 thread_ts=root,
             )
-        await self._upload_all(shots, video, root)
-        if result.ok:
-            await self.refresh_turn()
-
-    async def _upload_all(self, shots: list[Path], video: Path | None, root: str) -> None:
         for path in shots:
             await self._upload(path, root, path.stem)
-        if video is not None:
-            if video.stat().st_size <= self.settings.max_upload_mb * 1024 * 1024:
-                await self._upload(video, root, "Turn recording")
-            else:
-                await self.slack.post(f"Recording is too large to upload: {video}", thread_ts=root)
+        if result.ok:
+            await self.refresh_turn()
 
     async def _upload(self, path: Path, root: str, title: str) -> None:
         try:

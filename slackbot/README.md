@@ -12,7 +12,7 @@ Runs on the civ machine, in the logged-in Windows desktop session (screen captur
 - A run is `claude -p` in the repo root, limited to the `mcp__civ6` tools. The prompt goes in
   on stdin. The marker file `~/.civ6-mcp/standin.json` proves whether the turn really ended.
 - After a run: DM the player Claude's answer, @ the next player, post saves, screenshots
-  and the recording in a thread.
+  and screenshots (before, up to 2 during, after) in a thread.
 - Timer: ping at 1 hour. At 2 hours a takeover request with an Approve button opens. The
   current player alone, or 3 turn-order players, can approve. `takeover <prompt>` in a DM
   changes the prompt and clears approvals. A request expires after 30 minutes; after that,
@@ -36,10 +36,9 @@ scopes: `channels:history`, `chat:write`, `im:history`, `im:write`, `files:write
    setx SLACK_BOT_TOKEN "xoxb-..."
    setx SLACK_APP_TOKEN "xapp-..."
    ```
-4. Install `ffmpeg` and put it on `PATH` (recording).
-5. Check the table, the game and Slack: `uv run --group slackbot python -m slackbot --check`
+4. Check the table, the game and Slack: `uv run --group slackbot python -m slackbot --check`
    The Slack part reports bad tokens, missing scopes and a channel the bot cannot read.
-6. Start: `uv run --group slackbot python -m slackbot` (it runs the same Slack check and
+5. Start: `uv run --group slackbot python -m slackbot` (it runs the same Slack check and
    stops with a clear message if something is wrong).
 
 Optional env: `CIV_CHANNEL_ID`, `CIV_HISTORY_START_TS`, `CLAUDE_BIN`, `CIV_RUN_TIMEOUT_S`,
