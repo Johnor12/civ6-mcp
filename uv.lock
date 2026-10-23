@@ -313,6 +313,7 @@ slackbot = [
     { name = "aiohttp" },
     { name = "mss" },
     { name = "slack-bolt" },
+    { name = "tzdata" },
 ]
 
 [package.metadata]
@@ -324,6 +325,7 @@ slackbot = [
     { name = "aiohttp", specifier = ">=3.9" },
     { name = "mss", specifier = ">=9.0" },
     { name = "slack-bolt", specifier = ">=1.18" },
+    { name = "tzdata", specifier = ">=2024.1" },
 ]
 
 [[package]]
@@ -1297,6 +1299,15 @@ dependencies = [
 sdist = { url = "https://gnosis-packages-310660289096.d.codeartifact.us-east-1.amazonaws.com/pypi/gnosis_packages_repo/simple/typing-inspection/0.4.4/typing_inspection-0.4.4.tar.gz", hash = "sha256:547274fa6b0a561ccf549cc9524b999a578e737d015d8709d021f9d0d13bea47", size = 76928, upload-time = "2026-08-12T12:37:25.997Z" }
 wheels = [
     { url = "https://gnosis-packages-310660289096.d.codeartifact.us-east-1.amazonaws.com/pypi/gnosis_packages_repo/simple/typing-inspection/0.4.4/typing_inspection-0.4.4-py3-none-any.whl", hash = "sha256:65b8397ba37ccbce054456aaccddfc91e6e3083c92824df348d96ca832f3f147", size = 14750, upload-time = "2026-08-12T12:37:24.648Z" },
+]
+
+[[package]]
+name = "tzdata"
+version = "2026.5"
+source = { registry = "https://gnosis-packages-310660289096.d.codeartifact.us-east-1.amazonaws.com/pypi/gnosis_packages_repo/simple/" }
+sdist = { url = "https://gnosis-packages-310660289096.d.codeartifact.us-east-1.amazonaws.com/pypi/gnosis_packages_repo/simple/tzdata/2026.5/tzdata-2026.5.tar.gz", hash = "sha256:8cc73c0a0bfca7dbfa59235d60b2eff82231dee33f53d206db1acd9173cfc0a7", size = 200404, upload-time = "2026-10-03T09:23:14.143Z" }
+wheels = [
+    { url = "https://gnosis-packages-310660289096.d.codeartifact.us-east-1.amazonaws.com/pypi/gnosis_packages_repo/simple/tzdata/2026.5/tzdata-2026.5-py2.py3-none-any.whl", hash = "sha256:b683bd1b6659ddcd810ff02ad09ba821d4bf1065072805063eb35c49617905ac", size = 347996, upload-time = "2026-10-03T09:23:12.535Z" },
 ]
 
 [[package]]

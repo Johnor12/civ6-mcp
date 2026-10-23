@@ -69,8 +69,11 @@ def authorize(
 
 
 def due_actions(now: float, turn: Turn, settings: Settings) -> list[str]:
-    """Timer actions ("ping", "warn") that are due and not yet done."""
-    age = now - turn.started_at
+    """Timer actions ("ping", "warn") that are due and not yet done.
+
+    The clock counts office hours only (see hours.py).
+    """
+    age = settings.working_elapsed(turn.started_at, now)
     actions = []
     if age >= settings.ping_after_s and not turn.pinged:
         actions.append("ping")

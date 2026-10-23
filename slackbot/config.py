@@ -8,6 +8,8 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from slackbot.hours import DEFAULT_HOURS, DEFAULT_TZ, OfficeHours, working_seconds
+
 REPO_DIR = Path(__file__).resolve().parent.parent
 PLAYERS_PATH = Path(__file__).resolve().parent / "players.toml"
 
@@ -70,7 +72,14 @@ class Settings:
     bare_mention_max_chars: int = 40
     shot_interval_s: float = 120  # mid-turn screenshot spacing
     max_mid_shots: int = 2  # pre + mid + post = at most 4 images
+    # The turn timer and approval expiry count only these hours. None = always.
+    office_hours: OfficeHours | None = field(default_factory=lambda: dict(DEFAULT_HOURS))
+    tz: str = DEFAULT_TZ
     extra_env: dict[str, str] = field(default_factory=dict)
+
+    def working_elapsed(self, start: float, end: float) -> float:
+        """Seconds from start to end that count for timers."""
+        return working_seconds(start, end, self.office_hours, self.tz)
 
 
 def settings_from_env(env: dict[str, str] | None = None) -> Settings:
@@ -91,4 +100,6 @@ def settings_from_env(env: dict[str, str] | None = None) -> Settings:
         poll_interval_s=float(e.get("CIV_POLL_INTERVAL_S", d.poll_interval_s)),
         shot_interval_s=float(e.get("CIV_SHOT_INTERVAL_S", d.shot_interval_s)),
         max_mid_shots=int(e.get("CIV_MAX_MID_SHOTS", d.max_mid_shots)),
+        office_hours=None if e.get("CIV_OFFICE_HOURS", "").lower() == "off" else d.office_hours,
+        tz=e.get("CIV_TZ", d.tz),
     )

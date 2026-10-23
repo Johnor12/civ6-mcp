@@ -30,7 +30,7 @@ def approval_blocks(
 ) -> list[dict[str, Any]]:
     who = ", ".join(mention(u) for u in sorted(approvers)) or "nobody yet"
     text = (
-        f"{mention(player.slack_id)} the 2-hour limit is over. Claude can take your turn "
+        f"{mention(player.slack_id)} the 2 office hours are over. Claude can take your turn "
         f"({player.leader}).\n"
         f"*Prompt:* {safe(req.prompt)}\n"
         f"*Approvals:* {who}. Needs {needed} players, or {player.name} alone.\n"

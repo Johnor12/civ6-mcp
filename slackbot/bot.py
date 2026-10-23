@@ -220,8 +220,8 @@ class CivBot:
             if action == "ping":
                 self.store.mark_turn(row.id, "pinged")
                 await self.slack.post(
-                    f"{msg.mention(player.slack_id)} your turn has been open for {hours} hour. "
-                    "At 2 hours Claude can take it. DM me a prompt to start it now."
+                    f"{msg.mention(player.slack_id)} your turn has been open for {hours} office hour. "
+                    "After 2 office hours Claude can take it. DM me a prompt to start it now."
                 )
             elif action == "warn":
                 self.store.mark_turn(row.id, "warned")
@@ -251,7 +251,7 @@ class CivBot:
         await self.slack.update(req.message_ts, msg.closed_text(req, player, note), [])
 
     def _expired(self, req: Request) -> bool:
-        return self.clock() - req.created_at > self.settings.approval_ttl_s
+        return self.settings.working_elapsed(req.created_at, self.clock()) > self.settings.approval_ttl_s
 
     async def _expire_request(self, req: Request, player: Player) -> None:
         if self.store.close_request(req.id, "expired"):
@@ -280,7 +280,7 @@ class CivBot:
             req = None
         if req is None:
             if not row.warned:
-                await self.slack.dm(user_id, "No takeover request is open. One opens at the 2-hour mark.")
+                await self.slack.dm(user_id, "No takeover request is open. One opens after 2 office hours.")
                 return
             # The first request expired or closed: open a new one.
             await self._open_request(row.id, player, prompt or DEFAULT_NOTE)

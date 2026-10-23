@@ -13,13 +13,18 @@ Runs on the civ machine, in the logged-in Windows desktop session (screen captur
   on stdin. The marker file `~/.civ6-mcp/standin.json` proves whether the turn really ended.
 - After a run: DM the player Claude's answer, @ the next player, post saves, screenshots
   and screenshots (before, up to 2 during, after) in a thread.
-- Timer: ping at 1 hour. At 2 hours a takeover request with an Approve button opens. The
+- Timer: ping at 1 office hour. At 2 office hours a takeover request with an Approve button opens. The
   current player alone, or 3 turn-order players, can approve. `takeover <prompt>` in a DM
   changes the prompt and clears approvals. A request expires after 30 minutes; after that,
   `takeover <prompt>` opens a new one.
 - During a run the bot does not probe the game: a second bridge connection makes the mod
   skip the agent's commands.
 - `begin_standin_turn` saves `<LEADER> <turn> PRE MCP` before Start Turn.
+
+Office hours count for the timer and for request expiry: Monday to Thursday 10:00-16:30,
+Friday 10:00-15:00, New York time (`slackbot/hours.py`). Nights and weekends are skipped,
+so a turn left at 16:00 Thursday has 30 office minutes used at 10:00 Friday. Holidays are not
+handled. `CIV_TZ` changes the zone and `CIV_OFFICE_HOURS=off` turns the limit off.
 
 ## Setup
 

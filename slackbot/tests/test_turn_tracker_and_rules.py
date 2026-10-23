@@ -78,7 +78,7 @@ class TestRules:
         assert "does not answer" in check_game_ready(ME, GameStatus())
 
     def test_due_actions(self):
-        s = Settings(ping_after_s=100, warn_after_s=200)
+        s = Settings(ping_after_s=100, warn_after_s=200, office_hours=None)
         t = Turn(1, "UA", "1", 1000.0, False, False)
         assert due_actions(1050, t, s) == []
         assert due_actions(1100, t, s) == ["ping"]

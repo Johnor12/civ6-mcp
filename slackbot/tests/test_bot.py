@@ -84,7 +84,9 @@ def make(ok=True, hold=None, **settings):
     slack = FakeSlack()
     slack.history_msgs.append(ChannelMessage("1000000.0", "UX", "<@UA>"))
     clock = Clock()
-    s = Settings(history_start_ts="999999.0", warn_after_s=7200, ping_after_s=3600, **settings)
+    s = Settings(
+        history_start_ts="999999.0", warn_after_s=7200, ping_after_s=3600, office_hours=None, **settings
+    )
     game, runner = FakeGame(), FakeRunner(ok, hold)
     bot = CivBot(s, PLAYERS, Store(), slack, game, runner, FakeCapture(), clock)
     return bot, slack, game, runner, clock
@@ -153,7 +155,7 @@ def test_timers_then_approval_by_current_player_alone():
     assert slack.posts == []
     clock.t += 3601
     run(bot.tick())
-    assert "open for 1 hour" in slack.posts[-1]["text"]
+    assert "open for 1 office hour" in slack.posts[-1]["text"]
     clock.t += 3600
     run(bot.tick())
     run(bot.tick())  # no duplicates
@@ -267,7 +269,7 @@ def test_no_game_probe_during_a_run():
 def test_expired_request_closes_and_takeover_reopens():
     bot, slack, _, runner, clock = make(approval_ttl_s=60)
     run(bot.handle_dm("UB", "takeover early"))
-    assert "2-hour mark" in slack.dms[-1][1]
+    assert "2 office hours" in slack.dms[-1][1]
     clock.t += 7300
     run(bot.tick())
     old_id = [p for p in slack.posts if p["blocks"]][0]["blocks"][1]["elements"][0]["value"]
