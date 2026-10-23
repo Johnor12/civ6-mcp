@@ -31,6 +31,7 @@ class StandinConfig:
     finished_turn: int | None = None  # set once end_turn has ended the turn
     finished_at: str = ""
     finished_save: str = ""  # the save written after the turn ended
+    pre_turn_save: str = ""  # the save written on the turn-change screen before Start Turn
     next_player: str = ""  # whose turn-change screen the game was left on
     note: str = ""  # what the absent player asked for
 

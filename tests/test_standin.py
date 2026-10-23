@@ -118,3 +118,12 @@ class TestGuard:
         assert _run(guard.check(conn, standin.StandinConfig(active=True, leader="LEADER_POUNDMAKER"))) is None
         assert _run(guard.check(conn, standin.StandinConfig(active=True, leader="LEADER_ALEXANDER"))) is not None
         assert conn.calls == 2
+
+
+def test_pre_turn_save_round_trip(tmp_path):
+    path = tmp_path / "standin.json"
+    standin.save_config(
+        standin.StandinConfig(active=True, leader="LEADER_X", pre_turn_save="X 5 PRE MCP"),
+        path,
+    )
+    assert standin.active_config(path).pre_turn_save == "X 5 PRE MCP"
