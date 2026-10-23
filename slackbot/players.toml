@@ -33,7 +33,8 @@ aliases = ["Stanislaw", "Stanisław II Auguste"]
 [[players]]
 slack_id = "U08U40V8GCD"
 name = "Cameron Gonzalez"
-leader = "Trajan"
+leader = "Julius Caesar"
+aliases = ["Caesar"]
 
 [[players]]
 slack_id = "U0B1J1T47QC"
