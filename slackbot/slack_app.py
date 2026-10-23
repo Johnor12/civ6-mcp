@@ -12,6 +12,7 @@ from slackbot.bot import CivBot
 from slackbot.capture import DesktopCapture
 from slackbot.config import Settings, load_players, settings_from_env
 from slackbot.game import BridgeGameChecker
+from slackbot.preflight import env_problems, slack_problems
 from slackbot.runner import AgentRunner
 from slackbot.state import Store
 from slackbot.turn_tracker import ChannelMessage
@@ -114,6 +115,12 @@ async def serve(settings: Settings | None = None) -> None:
     from slack_bolt.adapter.socket_mode.aiohttp import AsyncSocketModeHandler
 
     settings = settings or settings_from_env()
+    problems = env_problems(os.environ)
+    if problems:
+        raise SystemExit("Cannot start:\n- " + "\n- ".join(problems))
     app, bot = build_app(settings)
+    problems = await slack_problems(app.client, settings.channel_id)
+    if problems:
+        raise SystemExit("Cannot start:\n- " + "\n- ".join(problems))
     asyncio.create_task(poll_loop(bot, settings.poll_interval_s))
     await AsyncSocketModeHandler(app, os.environ["SLACK_APP_TOKEN"]).start_async()

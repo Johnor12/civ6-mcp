@@ -23,13 +23,24 @@ Runs on the civ machine, in the logged-in Windows desktop session (screen captur
 
 ## Setup
 
-1. Create the Slack app (Socket Mode on). Scopes: `channels:history`, `chat:write`,
-   `im:history`, `im:write`, `files:write`, `users:read`. Subscribe to `message.im`.
-   Enable Interactivity. Invite the bot to the channel.
-2. Install `ffmpeg` and put it on `PATH` (recording).
-3. Set `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN`.
-4. Check the table and the game: `uv run --group slackbot python -m slackbot --check`
-5. Start: `uv run --group slackbot python -m slackbot`
+The Slack app is `civ6` (App ID `A0CBNQLDTP0`), created by John. `manifest.yml` holds its
+settings: Socket Mode, Interactivity, the `message.im` event, the Messages tab and these bot
+scopes: `channels:history`, `chat:write`, `im:history`, `im:write`, `files:write`, `users:read`.
+
+1. Compare the app with `manifest.yml` (App Manifest page). Fix any difference.
+2. Get the app installed in the workspace (needs approval). Then copy the Bot User OAuth
+   Token (`xoxb-`) from OAuth & Permissions. Invite the bot to `#proj-diplomatic-relations`.
+3. On the civ machine, set two user environment variables (Windows `setx`), then open a new
+   terminal. Never commit them or paste them in Slack.
+   ```
+   setx SLACK_BOT_TOKEN "xoxb-..."
+   setx SLACK_APP_TOKEN "xapp-..."
+   ```
+4. Install `ffmpeg` and put it on `PATH` (recording).
+5. Check the table, the game and Slack: `uv run --group slackbot python -m slackbot --check`
+   The Slack part reports bad tokens, missing scopes and a channel the bot cannot read.
+6. Start: `uv run --group slackbot python -m slackbot` (it runs the same Slack check and
+   stops with a clear message if something is wrong).
 
 Optional env: `CIV_CHANNEL_ID`, `CIV_HISTORY_START_TS`, `CLAUDE_BIN`, `CIV_RUN_TIMEOUT_S`,
 `CIV_PING_AFTER_S`, `CIV_WARN_AFTER_S`, `CIV_APPROVALS_NEEDED`, `CIV_APPROVAL_TTL_S`.
