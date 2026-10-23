@@ -11,7 +11,8 @@ HELP = (
     "Send me a DM with what Claude should do on your turn, for example "
     "`settle near the coast, research Bronze Working next, no wars`.\n"
     "I run it only when it is your turn in the channel and in the game.\n"
-    "Other commands: `status`, `takeover <prompt>` (sets the prompt for an open takeover request)."
+    "Other commands: `status`, `takeover <prompt>` (sets the prompt for the takeover request, "
+    "or opens a new one after the old one expired)."
 )
 
 

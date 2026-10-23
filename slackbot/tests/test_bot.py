@@ -47,8 +47,10 @@ class FakeGame:
     def __init__(self, leader="LEADER_CLEOPATRA"):
         self.leader = leader
         self.ready = True
+        self.probes = 0
 
     async def status(self):
+        self.probes += 1
         return GameStatus(
             reachable=True, is_hotseat=True, leader=self.leader, player_name="X", turn=5,
             turn_active=True, player_change_visible=self.ready, description="game text",
@@ -239,3 +241,54 @@ def test_status_and_help():
     assert "Slack turn: Aaron" in slack.dms[-1][1] and "game text" in slack.dms[-1][1]
     run(bot.handle_dm("UA", "help"))
     assert "takeover" in slack.dms[-1][1]
+
+
+def test_no_game_probe_during_a_run():
+    async def scenario():
+        hold = asyncio.Event()
+        bot, slack, game, runner, clock = make(hold=hold)
+        clock.t += 7300
+        await bot.tick()
+        req_id = [p for p in slack.posts if p["blocks"]][0]["blocks"][1]["elements"][0]["value"]
+        first = asyncio.create_task(bot.handle_dm("UA", "one"))
+        await asyncio.sleep(0.01)
+        probes = game.probes
+        await bot.handle_dm("UA", "status")
+        status_dm = slack.dms[-1][1]
+        await bot.handle_dm("UA", "two")
+        busy_dm = slack.dms[-1][1]
+        out = await bot.handle_approve("UA", req_id)
+        during = game.probes - probes
+        hold.set()
+        await first
+        return during, status_dm, busy_dm, out, bot.store.get_request(req_id).status
+
+    during, status_dm, busy_dm, out, req_status = run(scenario())
+    assert during == 0  # a probe would lock the agent out of the bridge
+    assert "not checked" in status_dm and "playing a turn now" in status_dm
+    assert "already playing" in busy_dm
+    assert out.job is None and "another turn" in out.reply and req_status == "open"
+
+
+def test_expired_request_closes_and_takeover_reopens():
+    bot, slack, _, runner, clock = make(approval_ttl_s=60)
+    run(bot.handle_dm("UB", "takeover early"))
+    assert "2-hour mark" in slack.dms[-1][1]
+    clock.t += 7300
+    run(bot.tick())
+    old_id = [p for p in slack.posts if p["blocks"]][0]["blocks"][1]["elements"][0]["value"]
+    clock.t += 61
+    run(bot.tick())
+    assert bot.store.get_request(old_id).status == "expired"
+    assert "expired" in slack.updates[-1][1] and slack.updates[-1][2] == []
+    run(bot.tick())  # no new request without a DM
+    assert len([p for p in slack.posts if p["blocks"]]) == 1
+
+    run(bot.handle_dm("UB", "takeover go west"))
+    assert "new takeover request" in slack.dms[-1][1]
+    reqs = [p for p in slack.posts if p["blocks"]]
+    assert len(reqs) == 2 and "go west" in str(reqs[1]["blocks"])
+    new_id = reqs[1]["blocks"][1]["elements"][0]["value"]
+    out = run(bot.handle_approve("UA", new_id))
+    run(out.job)
+    assert runner.calls == [("LEADER_CLEOPATRA", "go west")]

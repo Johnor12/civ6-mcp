@@ -21,6 +21,8 @@ from slackbot.turn_tracker import ChannelMessage, TurnState, current_turn, next_
 
 log = logging.getLogger(__name__)
 
+BUSY = "Claude is already playing a turn. Wait for it to end."
+
 
 class SlackPort(Protocol):
     async def history(self, oldest: str) -> list[ChannelMessage]: ...
@@ -101,7 +103,10 @@ class CivBot:
         if low.split()[0] == "takeover":
             await self._set_takeover_prompt(user_id, text[len("takeover"):].strip())
             return
-        game = await self.game.status()
+        game = await self._probe_game()
+        if game is None:
+            await self.slack.dm(user_id, BUSY)
+            return
         decision = authorize(user_id, turn, self.players, game)
         if not decision.allowed:
             log.info("refused DM from %s: %s", user_id, decision.reason)
@@ -110,11 +115,22 @@ class CivBot:
         await self.slack.dm(user_id, "Prompt accepted. Claude is starting your turn. I reply when it ends.")
         await self._run(decision.player, text, requested_by=user_id, source="dm", game=game)
 
+    async def _probe_game(self) -> GameStatus | None:
+        """Game status, or None while a run is on.
+
+        A new bridge connection starts a higher command number, so the mod
+        then skips every command from the agent's older connection.
+        """
+        if self._run_lock.locked():
+            return None
+        return await self.game.status()
+
     async def _status_text(self, turn: TurnState) -> str:
-        game = await self.game.status()
+        game = await self._probe_game()
         who = self.by_id[turn.player_id].name if turn.player_id else "nobody"
-        busy = "Claude is playing a turn now." if self._run_lock.locked() else "No run in progress."
-        return f"Slack turn: {who}.\nGame: {game.description or 'no answer'}\n{busy}"
+        if game is None:
+            return f"Slack turn: {who}.\nGame: not checked during a run.\nClaude is playing a turn now."
+        return f"Slack turn: {who}.\nGame: {game.description or 'no answer'}\nNo run in progress."
 
     # -- running a turn -------------------------------------------------------
 
@@ -122,7 +138,7 @@ class CivBot:
         self, player: Player, note: str, *, requested_by: str, source: str, game: GameStatus
     ) -> None:
         if self._run_lock.locked():
-            await self.slack.dm(requested_by.split(",")[0], "Claude is already playing a turn. Wait for it to end.")
+            await self.slack.dm(requested_by.split(",")[0], BUSY)
             return
         async with self._run_lock:
             root = await self.slack.post(
@@ -206,10 +222,13 @@ class CivBot:
             elif action == "warn":
                 self.store.mark_turn(row.id, "warned")
                 await self._open_request(row.id, player)
+        req = self.store.open_request_for_turn(row.id)
+        if req is not None and self._expired(req):
+            await self._expire_request(req, player)
 
-    async def _open_request(self, turn_id: int, player: Player) -> Request:
+    async def _open_request(self, turn_id: int, player: Player, prompt: str = DEFAULT_NOTE) -> Request:
         req = self.store.create_request(
-            uuid.uuid4().hex[:12], turn_id, DEFAULT_NOTE, self.clock()
+            uuid.uuid4().hex[:12], turn_id, prompt, self.clock()
         )
         ts = await self.slack.post(
             f"Takeover request for {player.name}",
@@ -227,6 +246,15 @@ class CivBot:
     async def _close_request_message(self, req: Request, player: Player, note: str) -> None:
         await self.slack.update(req.message_ts, msg.closed_text(req, player, note), [])
 
+    def _expired(self, req: Request) -> bool:
+        return self.clock() - req.created_at > self.settings.approval_ttl_s
+
+    async def _expire_request(self, req: Request, player: Player) -> None:
+        if self.store.close_request(req.id, "expired"):
+            await self._close_request_message(
+                req, player, "expired. DM me `takeover <prompt>` to open a new request."
+            )
+
     async def _request_context(self, req: Request) -> tuple[Player, TurnState] | None:
         """The request's player, if the turn is still theirs."""
         row = self.store.get_turn(req.turn_id)
@@ -242,15 +270,24 @@ class CivBot:
             return
         row = self.store.sync_turn(turn.player_id, turn.since_ts)
         req = self.store.open_request_for_turn(row.id)
+        player = self.by_id[turn.player_id]
+        if req is not None and self._expired(req):
+            await self._expire_request(req, player)
+            req = None
         if req is None:
-            await self.slack.dm(user_id, "No takeover request is open. One opens at the 2-hour mark.")
+            if not row.warned:
+                await self.slack.dm(user_id, "No takeover request is open. One opens at the 2-hour mark.")
+                return
+            # The first request expired or closed: open a new one.
+            await self._open_request(row.id, player, prompt or DEFAULT_NOTE)
+            await self.slack.dm(user_id, "Opened a new takeover request in the channel.")
             return
         if not prompt:
             await self.slack.dm(user_id, f"Current prompt: {msg.safe(req.prompt)}")
             return
         self.store.set_request_prompt(req.id, prompt)
         req = self.store.get_request(req.id)
-        await self._refresh_request_message(req, self.by_id[turn.player_id])
+        await self._refresh_request_message(req, player)
         await self.slack.dm(user_id, "Prompt changed. All earlier approvals are cleared.")
 
     async def handle_approve(self, user_id: str, request_id: str) -> Approval:
@@ -265,15 +302,16 @@ class CivBot:
             self.store.close_request(req.id, "stale")
             return Approval("The turn already moved on. This request is closed.")
         player, turn = ctx
-        if self.clock() - req.created_at > self.settings.approval_ttl_s:
-            self.store.close_request(req.id, "expired")
-            await self._close_request_message(req, player, "expired.")
-            return Approval("This request expired.")
+        if self._expired(req):
+            await self._expire_request(req, player)
+            return Approval("This request expired. DM me `takeover <prompt>` to open a new one.")
         approvers = self.store.add_approval(req.id, user_id)
         if not approval_met(approvers, player.slack_id, self.order, self.settings.approvals_needed):
             await self._refresh_request_message(req, player)
             return Approval(f"Approval recorded ({len(approvers)}/{self.settings.approvals_needed}).")
-        game = await self.game.status()
+        game = await self._probe_game()
+        if game is None:
+            return Approval("Enough approvals, but Claude is playing another turn. Click Approve again when it ends.")
         why_not = check_game_ready(player, game)
         if why_not:
             return Approval(f"Enough approvals, but the game is not ready: {why_not} Click Approve again when it is.")

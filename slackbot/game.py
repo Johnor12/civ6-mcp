@@ -17,8 +17,8 @@ class GameChecker(Protocol):
 class BridgeGameChecker:
     """Reads game state through the repo's own bridge, without a Claude run.
 
-    The connection is opened and closed per check, so it never overlaps
-    with the MCP server that the agent starts.
+    Each check opens a new connection. Never call it during a run: the mod
+    then skips the agent's commands (see CivBot._probe_game).
     """
 
     async def status(self) -> GameStatus:

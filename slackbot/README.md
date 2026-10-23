@@ -15,7 +15,10 @@ Runs on the civ machine, in the logged-in Windows desktop session (screen captur
   and the recording in a thread.
 - Timer: ping at 1 hour. At 2 hours a takeover request with an Approve button opens. The
   current player alone, or 3 turn-order players, can approve. `takeover <prompt>` in a DM
-  changes the prompt and clears approvals.
+  changes the prompt and clears approvals. A request expires after 30 minutes; after that,
+  `takeover <prompt>` opens a new one.
+- During a run the bot does not probe the game: a second bridge connection makes the mod
+  skip the agent's commands.
 - `begin_standin_turn` saves `<LEADER> <turn> PRE MCP` before Start Turn.
 
 ## Setup

@@ -77,11 +77,11 @@ def test_not_ok_when_marker_is_old():
 
 
 def test_error_exit_and_timeout():
-    r, _ = make_runner(FakeProc(b"", b"boom", code=1), marker())
+    r, _ = make_runner(FakeProc(b"", b"boom", code=1), marker(finished_turn=None))
     out = run(r.run("L", "x"))
     assert not out.ok and "boom" in out.text
     proc = FakeProc(hang=True)
-    r, _ = make_runner(proc, marker(), run_timeout_s=0.05)
+    r, _ = make_runner(proc, marker(finished_turn=None), run_timeout_s=0.05)
     out = run(r.run("L", "x"))
     assert not out.ok and "Timed out" in out.text and proc.killed
 
@@ -98,3 +98,14 @@ def test_split_for_slack():
     assert split_for_slack("short") == ["short"]
     parts = split_for_slack("\n".join(["x" * 50] * 100), limit=500)
     assert all(len(p) <= 500 for p in parts) and len(parts) > 1
+
+
+def test_turn_ended_even_if_run_then_failed():
+    r, _ = make_runner(FakeProc(b"", b"max turns", code=1), marker())
+    out = run(r.run("L", "x"))
+    assert out.ok and "turn ended" in out.text and out.finished_save == "POST"
+    r, _ = make_runner(FakeProc(hang=True), marker(), run_timeout_s=0.05)
+    out = run(r.run("L", "x"))
+    assert out.ok and "Timed out" in out.text
+    r, _ = make_runner(FakeProc(b"", b"boom", code=1), marker(finished_turn=None))
+    assert not run(r.run("L", "x")).ok

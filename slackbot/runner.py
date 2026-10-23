@@ -20,7 +20,7 @@ DEFAULT_NOTE = "Play a steady, sensible turn. No wars or peace deals. Leave a cl
 
 @dataclass
 class RunResult:
-    ok: bool
+    ok: bool  # the turn ended in the game
     text: str  # Claude's final answer, or the error
     pre_turn_save: str = ""
     finished_save: str = ""
@@ -109,6 +109,10 @@ class AgentRunner:
         if result.ok and cfg.finished_turn is None:
             result.ok = False
             result.text = "Claude finished, but the turn was not ended.\n" + result.text
+        elif not result.ok and cfg.finished_turn is not None:
+            # end_turn ran, then the run failed (timeout, max turns): the game moved on.
+            result.ok = True
+            result.text = "The turn ended, but the Claude run then failed.\n" + result.text
         return result
 
 
