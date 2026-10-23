@@ -213,10 +213,20 @@ async def begin_standin_turn(ctx: Context, leader: str, note: str = "") -> str:
         )
     if not st.turn_active:
         return f"Cannot begin: {lid}'s turn is not active (already ended?)."
+    pre_save = ""
     if st.player_change_visible:
+        # Rollback point: saved on the turn-change screen, before Start Turn.
+        try:
+            pre_save = await _hotseat.save_hotseat(
+                s.conn, f"{st.leader_display.upper()} {st.turn} PRE MCP"
+            )
+        except Exception as e:  # noqa: BLE001 - a failed save must not block the turn
+            log.warning("pre-turn save failed: %s", e)
+            pre_save = f"(pre-turn save failed: {e})"
         st = await _hotseat.accept_turn(s.conn)
 
     cfg = _standin.load_config() or _standin.StandinConfig()
+    cfg.pre_turn_save = pre_save
     cfg.active = True
     cfg.leader = lid
     cfg.player_name = st.player_name

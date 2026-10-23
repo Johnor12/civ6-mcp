@@ -12,3 +12,5 @@ dist/
 # Logs
 *.log
 logs/
+slackbot/bot.db
+slackbot/captures/

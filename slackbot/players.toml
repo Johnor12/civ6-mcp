@@ -1,0 +1,58 @@
+# Turn order (top to bottom, then wraps). Same as the civ pick order.
+# `aliases` are extra spellings of the leader or player name as the game
+# reports them (check with hotseat_status); modded leaders need these.
+
+[[players]]
+slack_id = "U0AN2M2PENR"
+name = "Aaron Sykes"
+leader = "Cleopatra"
+
+[[players]]
+slack_id = "U05JN8AA770"
+name = "Aidan O'Keefe"
+leader = "Nzinga Mbande"
+
+[[players]]
+slack_id = "U09E350TA30"
+name = "Jake DuRegger"
+leader = "Victoria"
+aliases = ["LEADER_VICTORIA_ALT", "Victoria Age of Empire"]
+
+[[players]]
+slack_id = "U0A6V0J4QP4"
+name = "Jeffson Lin"
+leader = "Al-Hasan ibn Sulaiman"
+aliases = ["Hasan", "Al-Hasan"]
+
+[[players]]
+slack_id = "U07UB8TFRNK"
+name = "Mike Dombrowski"
+leader = "Stanislaw II Auguste"
+aliases = ["Stanislaw", "Stanisław II Auguste"]
+
+[[players]]
+slack_id = "U08U40V8GCD"
+name = "Cameron Gonzalez"
+leader = "Julius Caesar"
+aliases = ["Caesar"]
+
+[[players]]
+slack_id = "U0B1J1T47QC"
+name = "Heldi Valikaj"
+leader = "Gitarja"
+
+[[players]]
+slack_id = "U0B7FQ1GJ7N"
+name = "Randy Schwemmer"
+leader = "Genghis Khan"
+
+[[players]]
+slack_id = "U07G75S7JBS"
+name = "Hunter Boyd"
+leader = "Amanitore"
+
+[[players]]
+slack_id = "U035CAQE34H"
+name = "John McGue"
+leader = "Kiviuq"
+aliases = ["Thule Kiviuq"]

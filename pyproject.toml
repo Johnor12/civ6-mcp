@@ -23,6 +23,13 @@ build-backend = "hatchling.build"
 dev = [
     "pytest>=8.0",
 ]
+slackbot = [
+    "slack-bolt>=1.18",
+    "aiohttp>=3.9",
+    "mss>=9.0",
+    "tzdata>=2024.1",  # Windows has no system time zone database
+]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "slackbot/tests"]
+pythonpath = ["."]
