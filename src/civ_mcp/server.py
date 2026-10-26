@@ -302,6 +302,7 @@ async def _turn_briefing(s: Session) -> str:
         "Pending diplomacy",
         lambda: _narrate(gs.get_diplomacy_sessions, nr.narrate_diplomacy_sessions),
     )
+    await section("Map pins", lambda: _narrate(gs.get_map_pins, nr.narrate_map_pins))
     await section("Cities", lambda: _cities_text(gs))
     await section("Units", lambda: _units_text(gs))
     await section(
@@ -315,7 +316,7 @@ async def get_turn_briefing(ctx: Context) -> str:
     """Everything this player can see, in one reply.
 
     Overview, last diary entry, notifications, pending trades and
-    diplomacy, cities, units with nearby threats, and the world snapshot:
+    diplomacy, map pins, cities, units with nearby threats, and the world snapshot:
     an ASCII hex map of every revealed tile plus every resource,
     improvement, district, wonder, unit and city on them. begin_standin_turn
     returns the same briefing; call this to refresh it after moving.
@@ -1532,6 +1533,62 @@ async def purchase_tile(ctx: Context, city_id: int, x: int, y: int) -> str:
     gs = _game(ctx)
     return await _logged(
         ctx, "purchase_tile", {"city_id": city_id, "x": x, "y": y}, lambda: gs.purchase_tile(city_id, x, y)
+    )
+
+
+@mcp.tool(annotations={"readOnlyHint": True})
+async def get_map_pins(ctx: Context) -> str:
+    """Every map pin (map tack) this player can see: their own, and pins others shared with them.
+
+    Pins are the player's own notes on the map (planned cities, districts,
+    improvements, threats). The turn briefing includes them; read them as
+    the player's plan.
+    """
+    gs = _game(ctx)
+    return await _logged(
+        ctx, "get_map_pins", {}, lambda: _narrate(gs.get_map_pins, nr.narrate_map_pins)
+    )
+
+
+@mcp.tool()
+async def place_map_pin(
+    ctx: Context, x: int, y: int, name: str, icon: str = "ICON_MAP_PIN_CIRCLE"
+) -> str:
+    """Put a map pin (map tack) on a tile for this player, or rename the one already there.
+
+    New pins are private to this player. Use them to mark plans the player
+    or the next stand-in should follow (city sites, district and
+    improvement spots); say in the diary what they mean.
+
+    Args:
+        x: Tile X coordinate
+        y: Tile Y coordinate
+        name: Label shown on the map, up to 20 characters (longer is cut)
+        icon: ICON_MAP_PIN_CIRCLE (default), _STRENGTH, _RANGED, _BOMBARD,
+            _DISTRICT, _CHARGES, _DEFENSE, _MOVEMENT, _NO, _PLUS, _TRIANGLE,
+            _SUN, _SQUARE, _DIAMOND; or an improvement, district or building
+            type such as IMPROVEMENT_CAMP or DISTRICT_CAMPUS for its icon
+    """
+    gs = _game(ctx)
+    return await _logged(
+        ctx,
+        "place_map_pin",
+        {"x": x, "y": y, "name": name, "icon": icon},
+        lambda: gs.place_map_pin(x, y, name, icon),
+    )
+
+
+@mcp.tool()
+async def remove_map_pin(ctx: Context, x: int, y: int) -> str:
+    """Delete this player's map pin on a tile (pins others shared stay).
+
+    Args:
+        x: Tile X coordinate
+        y: Tile Y coordinate
+    """
+    gs = _game(ctx)
+    return await _logged(
+        ctx, "remove_map_pin", {"x": x, "y": y}, lambda: gs.remove_map_pin(x, y)
     )
 
 

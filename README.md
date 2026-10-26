@@ -103,6 +103,19 @@ autosave at turn change, or a save from the turn-change screen's own Save
 Game button. A save made by the previous player still has that player's
 turn active and `begin_standin_turn` refuses it.
 
+## Better Balanced Game
+
+The games run the [Better Balanced Game](https://civ6bbg.github.io/en_US/leaders_7.5.html)
+mod (BBG 7.5.1, Steam Workshop 2865001760) with Better Balanced Maps. BBG
+changes most leader and civ abilities, unique units and improvements,
+policies and beliefs, so the agent cannot rely on vanilla Civ 6 knowledge.
+`CLAUDE.md` tells it to look up the seated civilization's BBG entry before
+planning a turn, let that kit drive its choices, and write the kit into the
+player's diary on the first stand-in. The game tools read units, districts
+and buildings from the running game's own tables, so their numbers already
+include the mod. When BBG updates, change the version in the links in
+`CLAUDE.md` and here.
+
 ## Guarantees
 
 - **One seat.** The marker names one leader; before every game tool the

@@ -1734,6 +1734,8 @@ for _, city in pCities:Members() do
                 local distIdx = plot:GetDistrictType()
                 local impIdx = plot:GetImprovementType()
                 local resIdx = plot:GetResourceType()
+                -- A resource this player has not revealed yet is not there for them
+                if resIdx >= 0 and not Players[me]:GetResources():IsResourceVisible(resIdx) then resIdx = -1 end
 
                 -- Skip tiles with districts
                 if distIdx < 0 then

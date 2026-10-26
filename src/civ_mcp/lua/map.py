@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from civ_mcp.lua._helpers import (
     _LUA_RES_VISIBLE,
     SENTINEL,
@@ -14,6 +16,7 @@ from civ_mcp.lua._helpers import (
 from civ_mcp.lua.models import (
     DistrictPlacement,
     FogBoundary,
+    MapPin,
     WonderPlacement,
     NearbyResource,
     OwnedResource,
@@ -740,7 +743,7 @@ for _, pIdx in ipairs(plotIndices) do
     local isCoastal = plot:IsCoastalLand()
     local resName = "none"
     local res = plot:GetResourceType()
-    if res >= 0 then
+    if res >= 0 and Players[me]:GetResources():IsResourceVisible(res) then
       local rInfo = GameInfo.Resources[res]
       if rInfo then resName = rInfo.ResourceType end
     end
@@ -1123,6 +1126,140 @@ def parse_purchasable_tiles_response(lines: list[str]) -> list[PurchasableTile]:
     return results
 
 
-# ── Strategic map dump (for web replay) ──────────────────────────────────
+# ── Map pins (map tacks) ─────────────────────────────────────────────────
+
+# The game's own pin popup caps names at 20 characters.
+PIN_NAME_MAX = 20
+
+
+def pin_name(name: str) -> str:
+    """A pin name safe inside a Lua "..." literal and a |-separated line."""
+    cleaned = "".join(ch for ch in name if ch.isprintable())
+    cleaned = cleaned.replace("\\", "/").replace('"', "'").replace("|", "/")
+    return cleaned.strip()[:PIN_NAME_MAX]
+
+
+def build_map_pins_query() -> str:
+    """Every map pin the local player can see: their own and pins others shared (InGame context)."""
+    return f"""
+local me = Game.GetLocalPlayer()
+local function clean(s) return (tostring(s or ""):gsub("[|\\r\\n]", " ")) end
+for pid = 0, 63 do
+    local cfg = PlayerConfigurations[pid]
+    local ok, pins = pcall(function() return cfg and cfg:GetMapPins() end)
+    if ok and pins then
+        for _, pin in pairs(pins) do
+            if pid == me or pin:IsVisible(me) then
+                local owner = "you"
+                if pid ~= me then owner = Locale.Lookup(cfg:GetLeaderName()) end
+                print("PIN|" .. pin:GetHexX() .. "," .. pin:GetHexY() .. "|" .. clean(pin:GetName())
+                    .. "|" .. clean(pin:GetIconName()) .. "|" .. clean(owner))
+            end
+        end
+    end
+end
+print("{SENTINEL}")
+"""
+
+
+def build_create_map_pin(x: int, y: int) -> str:
+    """Make sure the local player has a pin on a tile (InGame context).
+
+    Prints PIN_EXISTS|id or PIN_CREATED|id. A name or icon set in the call
+    that creates a pin is reset when the game syncs the new pin (seen live
+    in hotseat), so place_map_pin creates the pin here and names it with
+    build_set_map_pin in a later call.
+    """
+    return f"""
+local me = Game.GetLocalPlayer()
+if Map.GetPlot({x}, {y}) == nil then {_bail(f"ERR:OFF_MAP|({x},{y}) is not on the map")} end
+local cfg = PlayerConfigurations[me]
+for _, p in pairs(cfg:GetMapPins()) do
+    if p:GetHexX() == {x} and p:GetHexY() == {y} then
+        {_bail_lua('"PIN_EXISTS|" .. p:GetID()')}
+    end
+end
+local pin = cfg:GetMapPin({x}, {y})
+if pin == nil then {_bail("ERR:PIN_FAILED|the game did not create a pin")} end
+Network.BroadcastPlayerInfo()
+print("PIN_CREATED|" .. pin:GetID())
+print("{SENTINEL}")
+"""
+
+
+def build_set_map_pin(x: int, y: int, name: str, icon: str, private: bool) -> str:
+    """Name the local player's existing pin on a tile and set its icon (InGame context).
+
+    ``icon`` is an icon name (ICON_MAP_PIN_CIRCLE) or an improvement,
+    district or building type, resolved to its icon the way the game's pin
+    popup does. ``private`` makes the pin visible to this player only (for
+    a pin just created); otherwise the pin keeps its visibility.
+    """
+    label = pin_name(name)
+    icon = icon.strip().upper()
+    if not re.fullmatch(r"[A-Z][A-Z0-9_]*", icon):
+        return f"{_bail('ERR:BAD_ICON|icon must look like ICON_MAP_PIN_CIRCLE or IMPROVEMENT_CAMP')}\n"
+    visibility = "pin:SetVisibility(me)" if private else ""
+    return f"""
+local me = Game.GetLocalPlayer()
+local icon = "{icon}"
+local imp = GameInfo.Improvements[icon]
+if imp and imp.Icon then icon = imp.Icon
+elseif GameInfo.Districts[icon] or GameInfo.Buildings[icon] then icon = "ICON_" .. icon end
+if string.sub(icon, 1, 5) ~= "ICON_" then {_bail(f"ERR:BAD_ICON|{icon} is not an icon, improvement, district or building")} end
+local cfg = PlayerConfigurations[me]
+local id = nil
+for _, p in pairs(cfg:GetMapPins()) do
+    if p:GetHexX() == {x} and p:GetHexY() == {y} then id = p:GetID() end
+end
+if id == nil then {_bail(f"ERR:NO_PIN|You have no pin on ({x},{y})")} end
+-- Like MapPinPopup: edit the pin fetched by id.
+local pin = cfg:GetMapPinID(id)
+pin:SetName("{label}")
+pin:SetIconName(icon)
+{visibility}
+Network.BroadcastPlayerInfo()
+print("OK:PIN_SET|({x},{y}) {label} [" .. icon .. "]")
+print("{SENTINEL}")
+"""
+
+
+def build_remove_map_pin(x: int, y: int) -> str:
+    """Delete the local player's pins on a tile (InGame context)."""
+    return f"""
+local me = Game.GetLocalPlayer()
+local cfg = PlayerConfigurations[me]
+local ids = {{}}
+for _, p in pairs(cfg:GetMapPins()) do
+    if p:GetHexX() == {x} and p:GetHexY() == {y} then table.insert(ids, p:GetID()) end
+end
+if #ids == 0 then {_bail(f"ERR:NO_PIN|You have no pin on ({x},{y})")} end
+for _, id in ipairs(ids) do cfg:DeleteMapPin(id) end
+Network.BroadcastPlayerInfo()
+print("OK:PIN_REMOVED|({x},{y})")
+print("{SENTINEL}")
+"""
+
+
+def parse_map_pins_response(lines: list[str]) -> list[MapPin]:
+    """Parse PIN| lines from build_map_pins_query."""
+    pins: list[MapPin] = []
+    for line in lines:
+        if not line.startswith("PIN|"):
+            continue
+        parts = line.split("|")
+        if len(parts) < 5:
+            continue
+        coords = parts[1].split(",")
+        pins.append(
+            MapPin(
+                x=int(coords[0]),
+                y=int(coords[1]),
+                name=parts[2].strip(),
+                icon=parts[3],
+                owner=parts[4],
+            )
+        )
+    return sorted(pins, key=lambda p: (p.owner != "you", p.y, p.x))
 
 
