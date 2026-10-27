@@ -13,17 +13,19 @@
 Connects over Socket Mode (an outbound websocket, so no public URL). Only
 the players in PLAYERS (scripts/players.py) may use it; anyone else gets a
 joke and nothing runs.
-Every message is checked against whose turn the game is on:
+Every message is checked against whose turn the game is on. The bot only
+decides who may do what; what a message means is left to Claude.
 
-- From the player whose turn it is, by DM: the bot replies with their turn
-  and how long it has lasted, then runs `claude -p` in the repo root to play
-  it with their message as the note. In a channel they are asked to DM
-  instead, because the other players can read the channel.
-- From any other player, by DM or channel mention: once the turn has lasted
-  TURN_LIMIT_S of workday time, Claude plays it from a fixed prompt (the
-  message itself never reaches Claude). The absent player gets the progress
-  and Claude's reply by DM; the sender only hears whose turn it is now.
-  Before the limit, the sender gets the timer.
+- From the player whose turn it is, by DM: the message goes as-is to
+  `claude -p` in the repo root, which plays the turn with it as the note or
+  just answers it, whichever the player asked for. In a channel they are
+  asked to DM instead, because the other players can read the channel.
+- From any other player, by DM or channel mention: the reply says whose turn
+  it is and how long it has lasted. Once that is TURN_LIMIT_S of workday
+  time, the reply carries a button; clicking it has Claude play the turn
+  from a fixed prompt (nothing the player wrote reaches Claude). The absent
+  player gets the progress and Claude's reply by DM; the player who clicked
+  only hears whose turn it is now.
 
 How long a turn has lasted comes from the turn log that scripts/turn_logger.py
 keeps (scripts/start.py runs both). Before reading it the bot has the logger
@@ -99,17 +101,23 @@ SLACK_FORMAT = (
 
 OWN_TURN_PROMPT = """\
 This run was started from Slack by {name}, who plays {leader} in the hotseat \
-game. It is their turn, turn {turn}, and their message below is their note for \
-it. Nobody is at the terminal and nobody can answer questions before the run \
-ends, so decide for yourself and put your reasoning in the diary.
+game. {status} After {limit} of workday time ({workday}) any other player can \
+have it played for them. Nobody is at the terminal and nobody can answer \
+questions before the run ends.
 
-Take {leader}'s turn: follow the stand-in workflow in CLAUDE.md through \
-end_turn, with the message as the note for begin_standin_turn. The message \
-speaks for {leader}'s turn only: act for no other player, read no other \
-player's diary, and load a save only to open this turn if the game is at the \
-main menu. If something stops you (another player's turn-change screen, the \
-game not running, a popup that needs ESC in the game), stop and say what \
-someone at the PC has to do.
+Do what {name}'s message below asks. It may ask you to play their turn, or it \
+may only be a question. To play the turn, follow the stand-in workflow in \
+CLAUDE.md through end_turn with the message as the note for \
+begin_standin_turn; decide for yourself and put your reasoning in the diary. \
+begin_standin_turn presses Start Turn in the game for them, so call it only \
+when they want the turn played or ask about something only their game shows; \
+if you take the seat without playing the turn, leave it unended and say so.
+
+The message speaks for {leader}'s turn only: act for no other player, read no \
+other player's diary, and load a save only to open this turn if the game is \
+at the main menu. If something stops you (another player's turn-change \
+screen, the game not running, a popup that needs ESC in the game), stop and \
+say what someone at the PC has to do.
 
 Your final message is sent to {name} in Slack as-is. {slack_format}
 
@@ -136,6 +144,14 @@ Your final message is sent to {name} in Slack as-is, telling them what \
 happened to their turn. {slack_format}
 """
 TIMED_OUT_NOTE = "Turn timer ran out; played without a note from the player."
+
+# The button under a timed-out turn's status; its value is the turn's key, so
+# a click after that turn ended plays nothing.
+PLAY_ACTION = "play_timed_out_turn"
+NO_GAME = (
+    "I can't tell whose turn it is: the game isn't loaded and the turn log "
+    "is empty. Someone at the PC has to open the hotseat game."
+)
 
 # A progress step is (kind, text). "action", "text" and "error" steps are
 # listed and logged; "now" only replaces the status line under the list.
@@ -528,8 +544,8 @@ def register(app: App, claude: str, lock: TurnLock) -> None:
         if not user:
             return
 
-        def reply(text: str):
-            return say(text=text, thread_ts=thread_ts)
+        def reply(text: str, **kwargs):
+            return say(text=text, thread_ts=thread_ts, **kwargs)
 
         sender = SLACK_PLAYERS.get(user)
         if sender is None:
@@ -537,26 +553,72 @@ def register(app: App, claude: str, lock: TurnLock) -> None:
             reply(REJECTION)
             return
 
+        def work() -> None:
+            current = whose_turn()
+            if current is None:
+                reply(NO_GAME)
+                return
+            rec, worked = current
+            owner = player_named(rec.player)
+            text = slack_unescape(re.sub(rf"<@{context.bot_user_id}>", "", event.get("text", ""))).strip()
+            log.info("%s on %s's turn %d (%s): %r", sender.name, rec.player, rec.turn, "DM" if is_dm else "mention", text)
+            if owner == sender:
+                own_turn(sender, rec, worked, text, is_dm, reply, client, event["channel"], thread_ts)
+            else:
+                other_turn(owner, rec, worked, reply)
+
+        locked(user, reply, work)
+
+    @app.action(PLAY_ACTION)
+    def on_play(ack, body, action, client, say):
+        ack()
+        user = body["user"]["id"]
+        message = body.get("message") or {}
+        thread_ts = message.get("thread_ts")
+
+        def reply(text: str):
+            return say(text=text, thread_ts=thread_ts)
+
+        sender = SLACK_PLAYERS.get(user)
+        if sender is None:
+            log.warning("refused a click from %s", user)
+            reply(REJECTION)
+            return
+
+        def work() -> None:
+            current = whose_turn()
+            if current is None:
+                reply(NO_GAME)
+                return
+            rec, worked = current
+            owner = player_named(rec.player)
+            if list(rec.key) != json.loads(action["value"]):
+                nxt = owner.name if owner else rec.player
+                reply(f"That turn is over: it's {nxt}'s turn {rec.turn} now. Message me for its timer.")
+                return
+            if owner == sender:
+                reply("It's your turn: DM me what you want done with it.")
+                return
+            # Take the button away so nobody clicks it again.
+            client.chat_update(
+                channel=body["channel"]["id"],
+                ts=message["ts"],
+                text=f"{message.get('text', '')}\n_{sender.name} asked me to play it._",
+                blocks=[],
+            )
+            play_timed_out_turn(sender, owner, rec, worked, reply, client)
+
+        locked(user, reply, work)
+
+    def locked(user: str, reply, work: Callable[[], None]) -> None:
+        """Do one message's work holding the run lock, or say who holds it."""
         if not lock.try_acquire(user):
             run = lock.current
             since = f" <@{run.user}> started {minutes(time.monotonic() - run.started)} ago" if run else ""
             reply(f"Busy with the run{since}. Message me again when it's done.")
             return
         try:
-            current = whose_turn()
-            if current is None:
-                reply(
-                    "I can't tell whose turn it is: the game isn't loaded and the turn log "
-                    "is empty. Someone at the PC has to open the hotseat game."
-                )
-                return
-            rec, worked = current
-            owner = player_named(rec.player)
-            if owner == sender:
-                text = slack_unescape(re.sub(rf"<@{context.bot_user_id}>", "", event.get("text", ""))).strip()
-                own_turn(sender, rec, worked, text, is_dm, reply, client, event["channel"], thread_ts)
-            else:
-                timed_out_turn(sender, owner, rec, worked, reply, client)
+            work()
         except Exception as exc:
             log.exception("run failed")
             reply(f"The bot itself failed: `{exc}`")
@@ -564,33 +626,56 @@ def register(app: App, claude: str, lock: TurnLock) -> None:
             lock.release()
 
     def own_turn(sender: Player, rec, worked: float, text: str, is_dm: bool, reply, client, channel: str, thread_ts):
-        """The player whose turn it is: their message is the note for their turn."""
-        status = turn_status(rec, worked, "your")
+        """The player whose turn it is: their DM goes to Claude as-is, to play the turn or answer."""
         if not is_dm:
-            reply(f"{status} DM me your note for it: the other players can read this channel.")
+            reply(f"{turn_status(rec, worked, 'your')} DM me about it: the other players can read this channel.")
             return
-        if not text:
-            reply(f"{status} Send me your note for it, e.g. `finish the campus, no wars`.")
-            return
-        reply(f"{status} Playing it now with your note.")
         log.info("own turn for %s, %s turn %d: %r", sender.name, rec.leader, rec.turn, text)
         prompt = OWN_TURN_PROMPT.format(
-            name=sender.name, leader=rec.leader_display, turn=rec.turn, text=text, slack_format=SLACK_FORMAT
+            name=sender.name,
+            leader=rec.leader_display,
+            status=turn_status(rec, worked, f"{sender.name}'s"),
+            limit=duration(TURN_LIMIT_S),
+            workday=WORKDAY,
+            text=text,
+            slack_format=SLACK_FORMAT,
         )
         run_with_progress(client, channel, thread_ts, prompt, claude)
         turn_announcer.announce(client)
 
-    def timed_out_turn(sender: Player, owner: Player | None, rec, worked: float, reply, client):
-        """Another player: play the turn from a fixed prompt once its timer has run out."""
+    def other_turn(owner: Player | None, rec, worked: float, reply) -> None:
+        """Another player: the turn's timer, and once it has run out a button to have the turn played."""
         name = owner.name if owner else rec.player
+        status = turn_status(rec, worked, f"{name}'s")
         if worked < TURN_LIMIT_S:
-            whose = f"{name}'s"
             reply(
-                f"{turn_status(rec, worked, whose)} Another player can have it "
+                f"{status} Another player can have it "
                 f"played after {duration(TURN_LIMIT_S)} of workday time ({WORKDAY}), so in "
                 f"{duration(TURN_LIMIT_S - worked)}."
             )
             return
+        text = f"{status} That's past the {duration(TURN_LIMIT_S)} limit, so you can have me play it for {name}."
+        button = {
+            "type": "button",
+            "action_id": PLAY_ACTION,
+            "value": json.dumps(list(rec.key)),
+            "text": {"type": "plain_text", "text": f"Play {name}'s turn"},
+            "confirm": {
+                "title": {"type": "plain_text", "text": "Play the turn?"},
+                "text": {
+                    "type": "plain_text",
+                    "text": f"Claude plays {rec.leader_display}'s turn {rec.turn} by {name}'s diary and ends it. {name} gets the details.",
+                },
+                "confirm": {"type": "plain_text", "text": "Play it"},
+                "deny": {"type": "plain_text", "text": "Cancel"},
+            },
+        }
+        blocks = [{"type": "section", "text": {"type": "mrkdwn", "text": text}}, {"type": "actions", "elements": [button]}]
+        reply(text, blocks=blocks)
+
+    def play_timed_out_turn(sender: Player, owner: Player | None, rec, worked: float, reply, client):
+        """Play a turn whose timer ran out from a fixed prompt, for the player who clicked the button."""
+        name = owner.name if owner else rec.player
         dm = open_dm(client, owner)
         reply(
             f"{name}'s turn ({rec.leader_display}, turn {rec.turn}) has lasted {duration(worked)} "

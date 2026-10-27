@@ -110,18 +110,23 @@ instead of someone typing into Claude Code. It runs on the game PC and
 connects over Socket Mode (an outbound websocket, no public URL). Only the
 players hard-coded in `PLAYERS` in `scripts/players.py` (Slack user ID and
 hotseat player name) may use it; anyone else gets a joke reply and nothing
-runs. Each message is checked against whose turn the game is on:
+runs. Each message is checked against whose turn the game is on. The bot
+only decides who may do what; what a message means is up to Claude.
 
-- **Your own turn: DM the bot your note** (`finish the campus, no wars`).
-  It replies with your turn and how long it has lasted, then runs
-  `claude -p` in the repo root to play it with your message as the note.
-  Mentioning the bot in a channel on your own turn only gets "DM me", since
-  the other players read the channel.
-- **Someone else's turn: DM or mention the bot with anything.** Once that
-  turn has lasted 2 hours of workday time (9:00–17:00, Mon–Fri), Claude plays
-  it from a fixed prompt: what you wrote never reaches Claude. The absent
-  player gets the progress and Claude's report by DM; you only hear whose
-  turn it is afterwards. Before the 2 hours are up you get the timer.
+- **Your own turn: DM the bot.** Your message goes as-is to `claude -p` in
+  the repo root, with whose turn it is and how long it has lasted. Claude
+  plays the turn with your message as the note (`finish the campus, no
+  wars`) or just answers it ("how long do I have?"), whichever you asked
+  for. Mentioning the bot in a channel on your own turn only gets "DM me",
+  since the other players read the channel.
+- **Someone else's turn: DM or mention the bot.** You get whose turn it is
+  and how long it has lasted. Once that is 2 hours of workday time
+  (9:00–17:00, Mon–Fri), the reply has a "Play Cameron's turn" button;
+  clicking it (and confirming) has Claude play the turn from a fixed
+  prompt. Nothing you wrote reaches Claude. The absent player gets the
+  progress and Claude's report by DM; you only hear whose turn it is
+  afterwards. A button left over from a turn that has since ended does
+  nothing.
 
 ```bash
 cp .env.example .env      # bot token, app token
@@ -131,7 +136,8 @@ uv run scripts/start.py   # the turn logger, the turn announcer and the bot
 The Slack app needs Socket Mode on, an app-level token with
 `connections:write`, the bot scopes `app_mentions:read`, `im:history`,
 `im:write`, `chat:write` and `channels:history`, the bot events
-`app_mention` and `message.im`, the Messages tab enabled under App Home
+`app_mention` and `message.im`, Interactivity turned on (for the button;
+Socket Mode needs no request URL), the Messages tab enabled under App Home
 (for DMs), and an invite to #proj-diplomatic-relations.
 
 - **Turn timer.** `scripts/turn_logger.py` asks the game whose turn it is
