@@ -1149,6 +1149,44 @@ class GameState:
         return _action_result(lines)
 
     # ------------------------------------------------------------------
+    # Map pins (InGame context)
+    # ------------------------------------------------------------------
+
+    async def get_map_pins(self) -> list[lq.MapPin]:
+        lines = await self.conn.execute(lq.build_map_pins_query())
+        return lq.parse_map_pins_response(lines)
+
+    # A pin named in the call that creates it comes back nameless a moment
+    # later (seen live in hotseat), so create first, name in a later call,
+    # and read it back after the game has had time to sync.
+    PIN_SETTLE_S = 1.0
+
+    async def place_map_pin(self, x: int, y: int, name: str, icon: str) -> str:
+        lines = await self.conn.execute(lq.build_create_map_pin(x, y))
+        created = any(l.startswith("PIN_CREATED|") for l in lines)
+        if not created and not any(l.startswith("PIN_EXISTS|") for l in lines):
+            return _action_result(lines)
+        label = lq.pin_name(name)
+        for _ in range(3):
+            if created:
+                await asyncio.sleep(self.PIN_SETTLE_S)
+            result = _action_result(
+                await self.conn.execute(lq.build_set_map_pin(x, y, name, icon, private=created))
+            )
+            if result.startswith("Error"):
+                return result
+            await asyncio.sleep(self.PIN_SETTLE_S)
+            pins = await self.get_map_pins()
+            if any(p.x == x and p.y == y and p.owner == "you" and p.name == label for p in pins):
+                verb = "PIN_PLACED" if created else "PIN_UPDATED"
+                return result.replace("PIN_SET", verb, 1)
+        return f"Error: PIN_NOT_SAVED|the pin on ({x},{y}) exists but the game kept resetting its name"
+
+    async def remove_map_pin(self, x: int, y: int) -> str:
+        lines = await self.conn.execute(lq.build_remove_map_pin(x, y))
+        return _action_result(lines)
+
+    # ------------------------------------------------------------------
     # Government change (InGame context)
     # ------------------------------------------------------------------
 

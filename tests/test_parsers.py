@@ -366,3 +366,35 @@ def test_move_changes_report_lost_units():
     pre = (30, 5, {1: "UNIT_WARRIOR@1,1", 2: "UNIT_SETTLER@1,2"})
     post = (30, 5, {1: "UNIT_WARRIOR@1,2"})
     assert describe_move_changes(pre, post, False) == "units lost: UNIT_SETTLER"
+
+
+def test_map_pins_parse_own_pins_first_then_shared():
+    from civ_mcp.lua.map import parse_map_pins_response
+
+    pins = parse_map_pins_response([
+        "PIN|49,10|Hunter's House|ICON_IMPROVEMENT_LIME_THULE_WBH|you",
+        "PIN|12,3|Rush here|ICON_MAP_PIN_STRENGTH|Amanitore",
+        "PIN|47,8|City +1 food|ICON_MAP_PIN_CIRCLE|you",
+        "noise",
+    ])
+    assert [(p.x, p.y, p.owner) for p in pins] == [
+        (47, 8, "you"), (49, 10, "you"), (12, 3, "Amanitore")
+    ]
+    assert pins[1].name == "Hunter's House"
+
+
+def test_map_pin_name_is_cleaned_and_capped():
+    from civ_mcp.lua.map import pin_name
+
+    assert pin_name('Camp "deer"|x\\y\n') == "Camp 'deer'/x/y"
+    assert len(pin_name("a" * 50)) == 20
+
+
+def test_set_map_pin_rejects_an_unsafe_icon():
+    from civ_mcp.lua.map import build_set_map_pin
+
+    lua = build_set_map_pin(1, 2, "x", 'ICON"); os.exit()--', private=True)
+    assert "ERR:BAD_ICON" in lua and "os.exit" not in lua
+    lua = build_set_map_pin(1, 2, "x", "improvement_camp", private=False)
+    assert 'local icon = "IMPROVEMENT_CAMP"' in lua and "SetVisibility" not in lua
+    assert "pin:SetVisibility(me)" in build_set_map_pin(1, 2, "x", "ICON_MAP_PIN_SUN", private=True)

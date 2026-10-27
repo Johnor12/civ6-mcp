@@ -108,6 +108,8 @@ for i, c in Players[me]:GetCities():Members() do
         local plot = Map.GetPlot(px, py)
         if plot and plot:GetOwner() == me then
             local res = plot:GetResourceType()
+            -- A resource this player has not revealed yet (Iron before Bronze Working) is not there for them
+            if res >= 0 and not Players[me]:GetResources():IsResourceVisible(res) then res = -1 end
             local imp = plot:GetImprovementType()
             if res >= 0 and imp < 0 then
                 local resInfo = GameInfo.Resources[res]

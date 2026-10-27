@@ -1380,6 +1380,17 @@ def narrate_purchasable_tiles(tiles: list[lq.PurchasableTile]) -> str:
     return "\n".join(lines)
 
 
+def narrate_map_pins(pins: list[lq.MapPin]) -> str:
+    if not pins:
+        return "No map pins."
+    lines = [f"{len(pins)} map pins (plans the player or a stand-in marked on the map):"]
+    for p in pins:
+        icon = p.icon.removeprefix("ICON_")
+        owner = "" if p.owner == "you" else f" — shared by {p.owner}"
+        lines.append(f"  ({p.x},{p.y}): {p.name or '(no name)'} [{icon}]{owner}")
+    return "\n".join(lines)
+
+
 def narrate_great_people(gp: list[lq.GreatPersonInfo]) -> str:
     if not gp:
         return "No Great People in timeline."

@@ -938,6 +938,17 @@ class PurchasableTile:
 
 
 @dataclass
+class MapPin:
+    """A map pin (map tack) the local player can see."""
+
+    x: int
+    y: int
+    name: str
+    icon: str  # e.g. ICON_MAP_PIN_CIRCLE, ICON_IMPROVEMENT_CAMP
+    owner: str  # "you", or the leader who shared the pin
+
+
+@dataclass
 class GreatPersonInfo:
     """Info about an available or claimed Great Person."""
 

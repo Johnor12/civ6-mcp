@@ -22,7 +22,8 @@ query what you need before deciding.
    shows someone else: never play a different player than the one named.
    Its reply is the **turn briefing**: overview, the last diary entry,
    notifications, pending deals, cities, units and the world snapshot.
-3. Read the briefing, then run the turn loop below. `get_turn_briefing`
+3. Read the briefing and the civilization's BBG kit (see Better Balanced
+   Game), then run the turn loop below. `get_turn_briefing`
    returns a fresh briefing mid-turn; `get_diary` has older entries.
 4. `end_turn` exactly once when the turn is done. It refuses while a
    diplomacy encounter or incoming deal is open, while a blocker remains,
@@ -46,6 +47,37 @@ While the **STAND-IN MODE** paragraph shows in `get_game_overview`:
   about what you did and why.
 - You only see what this player can see. Do not try to work around that.
 
+## Better Balanced Game
+
+The games run the **Better Balanced Game** mod (BBG 7.5.1, Steam Workshop
+2865001760) with Better Balanced Maps. BBG rewrites most leader and civ
+abilities, unique units, improvements and buildings, policies, pantheons
+and beliefs, so what you know about vanilla Civ 6 is often wrong here.
+
+Before planning a player's turn, read their civilization's BBG entry: civ
+ability, leader ability, unique unit, unique infrastructure, start bias.
+Let it drive the turn: build order, research and civic path, where to
+settle, what to improve, which districts to place where. On the first
+stand-in for a player, write the kit into the diary's strategic field so
+later stand-ins have it without the lookup.
+
+- Leaders and civs: https://civ6bbg.github.io/en_US/leaders_7.5.html. The
+  other pages follow the same pattern: `units_`, `buildings_`,
+  `improvements_`, `policies_`, `religion_`, `governor_`, `great_people_`,
+  `city_states_`, `tech_tree_`, `civic_tree_`, `world_wonder_`,
+  `natural_wonder_`, `changelog_7.5.html`.
+- The leaders page is about 1 MB. WebFetch reads 100k characters per call
+  and most civs are far down the page, so download it with curl into the
+  scratchpad and extract the one entry. It starts at a comment such as
+  `<!--LOC_CIVILIZATION_NUBIA_NAME LOC_LEADER_AMANITORE_NAME-->`; the BBG
+  text of each ability is the element with class `actual-text`. The
+  `base-game-text` block after it repeats that text beside the vanilla
+  version for comparison.
+
+The game tools read units, districts and buildings from the running game's
+tables, so their numbers already include BBG. When they disagree with the
+docs, trust the tools.
+
 ## Coordinate system
 
 Hex grid (X, Y) where **higher Y is visually south**. X increases east.
@@ -66,7 +98,8 @@ tile is in fog, so what was there may have changed.
 ## Turn loop
 
 1. The briefing — turn, yields, research, notifications, pending deals,
-   cities, units, world. Check it against the diary's plan.
+   map pins, cities, units, world. Check it against the diary's plan and
+   the map pins.
 2. Anything **Action Required** in Notifications is resolved first.
 3. `get_units` after moving when you need fresh positions and threats.
 4. `get_map_area` for tile yields and movement costs when choosing a
@@ -78,6 +111,17 @@ tile is in fog, so what was there may have changed.
 8. Spend what the note allows: `purchase_item`, `purchase_tile`,
    `send_envoy`, `set_policies`, `promote_unit`, governors, Great People.
 9. `end_turn` with the five reflections.
+
+## Map pins
+
+The briefing's Map pins section lists every pin (map tack) this player can
+see: their own, and pins other players shared with them (`get_map_pins`
+reads them mid-turn). A human's pins are their plan, so follow them: a pin
+on a tile usually means "settle here", "district here" or "build this
+improvement here". `place_map_pin(x, y, name, icon)` marks a plan of your
+own (private to this player; `icon` takes an improvement or district type
+such as `IMPROVEMENT_CAMP`), and `remove_map_pin` clears one that is done or
+stale. Say in the diary what any pin you placed means.
 
 ## Diary
 
@@ -156,5 +200,5 @@ the World Congress disabled.
 same for wonders. `get_tech_civics` flags cheap boosted items with `!! GRAB THIS`.
 
 All unit, district and building data comes from the game's own tables, so
-modded content (this game runs Better Balanced Game) shows up with its
-modded values. Trust the numbers the tools print.
+BBG content shows up with its modded values. Trust the numbers the tools
+print.
