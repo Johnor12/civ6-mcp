@@ -3,13 +3,13 @@
 # requires-python = ">=3.12"
 # dependencies = []
 # ///
-"""Start the turn logger and the Slack bot side by side.
+"""Start the turn logger, the turn announcer and the Slack bot side by side.
 
     uv run scripts/start.py
 
 Each runs as its own `uv run` process in its own environment (the inline
 metadata at the top of each script) and writes to this console. When one
-of them exits, or on Ctrl+C, the other is stopped too.
+of them exits, or on Ctrl+C, the others are stopped too.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ import time
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parent
-SERVICES = ("turn_logger.py", "slack_bot.py")
+SERVICES = ("turn_logger.py", "turn_announcer.py", "slack_bot.py")
 
 
 def main() -> None:

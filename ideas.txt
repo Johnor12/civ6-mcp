@@ -1,1 +1,1 @@
-test a fresh hotseat game up to turn 20
+process which runs every 5 minutes or so, checks whose turn it is, cross references it with slack proj-diplomatic-relations, and if the current player hasn't been @'d in that channel, @'s them

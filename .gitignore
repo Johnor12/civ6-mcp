@@ -13,5 +13,8 @@ dist/
 *.log
 logs/
 
+# The turn announcer's lock file
+scripts/data/*.lock
+
 # Secrets
 .env

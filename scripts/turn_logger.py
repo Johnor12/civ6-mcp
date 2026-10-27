@@ -10,8 +10,9 @@
 Every POLL_S it asks the game whose turn it is (civ_mcp's
 hotseat.whose_turn, over the same bridge the MCP server uses) and appends
 a row to scripts/data/turn_log.jsonl when the turn or the player differs
-from the last row. The Slack bot (scripts/slack_bot.py) imports this module
-and reads the log with duration_of_current_turn(). The inline metadata
+from the last row. The Slack bot (scripts/slack_bot.py) and the turn
+announcer (scripts/turn_announcer.py) import this module and read the log
+with duration_of_current_turn(). The inline metadata
 above gives the script its own environment, so it never syncs the project
 venv that the running MCP server holds open; civ_mcp is imported from src/
 and needs only the standard library.
@@ -41,6 +42,8 @@ POLL_S = 5 * 60
 # Workday hours, local time, Monday to Friday.
 WORKDAY_START_HOUR = 9
 WORKDAY_END_HOUR = 17
+WORKDAY = f"{WORKDAY_START_HOUR}:00–{WORKDAY_END_HOUR}:00, Mon–Fri"
+TURN_LIMIT_S = 2 * 3600  # workday time after which another player may have a turn played
 
 
 @dataclass(frozen=True)
@@ -144,6 +147,28 @@ def workday_seconds(start: datetime, end: datetime) -> float:
             total += max(0.0, (min(end, closes) - max(start, opens)).total_seconds())
         day += timedelta(days=1)
     return total
+
+
+def workday_deadline(start: datetime, seconds: float) -> datetime:
+    """The naive local time at which `seconds` of workday time since `start` are up."""
+    day = start.date()
+    while True:
+        if day.weekday() < 5:
+            opens = max(start, datetime.combine(day, clock(WORKDAY_START_HOUR)))
+            open_s = (datetime.combine(day, clock(WORKDAY_END_HOUR)) - opens).total_seconds()
+            if seconds <= open_s:
+                return opens + timedelta(seconds=seconds)
+            seconds -= max(0.0, open_s)
+        day += timedelta(days=1)
+
+
+def duration(seconds: float) -> str:
+    """5400 -> '1h 30m'."""
+    hours, mins = divmod(int(seconds // 60), 60)
+    parts = [f"{hours}h"] if hours else []
+    if mins or not hours:
+        parts.append(f"{mins}m")
+    return " ".join(parts)
 
 
 def main() -> None:

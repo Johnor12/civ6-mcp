@@ -11,7 +11,8 @@
     uv run scripts/slack_bot.py
 
 Connects over Socket Mode (an outbound websocket, so no public URL). Only
-the players in PLAYERS may use it; anyone else gets a joke and nothing runs.
+the players in PLAYERS (scripts/players.py) may use it; anyone else gets a
+joke and nothing runs.
 Every message is checked against whose turn the game is on:
 
 - From the player whose turn it is, by DM: the bot replies with their turn
@@ -27,7 +28,10 @@ Every message is checked against whose turn the game is on:
 How long a turn has lasted comes from the turn log that scripts/turn_logger.py
 keeps (scripts/start.py runs both). Before reading it the bot has the logger
 ask the game once, so a turn ended at the PC or by the last run counts
-without waiting for the logger's next poll.
+without waiting for the logger's next poll. The bot only reacts to
+messages: pinging and reminding players in the game channel is
+scripts/turn_announcer.py's job, and the bot calls it once after each run so
+the player whose turn it is now hears at once.
 
 While Claude runs, a status message lists the game actions it takes and its
 narration, and the bot's console logs the same lines; Claude's final reply
@@ -54,10 +58,13 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
+import turn_announcer  # scripts/turn_announcer.py, next to this script
 import turn_logger  # scripts/turn_logger.py, next to this script
 from dotenv import dotenv_values
+from players import PLAYERS, SLACK_PLAYERS, Player, player_named
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
+from turn_logger import TURN_LIMIT_S, WORKDAY, duration
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -66,32 +73,6 @@ log = logging.getLogger("slack_bot")
 REJECTION = "Deleting save, uninstalling Civilization 6, and wiping Windows."
 TURN_TIMEOUT_S = 90 * 60
 SLACK_MAX_CHARS = 3500
-TURN_LIMIT_S = 2 * 3600  # workday time after which another player may have a turn played
-WORKDAY = f"{turn_logger.WORKDAY_START_HOUR}:00–{turn_logger.WORKDAY_END_HOUR}:00, Mon–Fri"
-
-
-@dataclass(frozen=True)
-class Player:
-    name: str  # hotseat player name in the game
-    slack_id: str
-
-
-# Everyone who may use the bot. They play under their first names, except
-# Jake (full name); John's hotseat name is "John" with the quotes, and names
-# match without quotes or case.
-PLAYERS = (
-    Player("Aaron", "U0AN2M2PENR"),  # Aaron Sykes
-    Player("Aidan", "U05JN8AA770"),  # Aidan O'Keefe
-    Player("Jake DuRegger", "U09E350TA30"),
-    Player("Jeffson", "U0A6V0J4QP4"),  # Jeffson Lin
-    Player("Mike", "U07UB8TFRNK"),  # Mike Dombrowski
-    Player("Cameron", "U08U40V8GCD"),  # Cameron Gonzalez
-    Player("Heldi", "U0B1J1T47QC"),  # Heldi Valikaj
-    Player("Randy", "U0B7FQ1GJ7N"),  # Randy Schwemmer
-    Player("Hunter", "U07G75S7JBS"),  # Hunter Boyd
-    Player("John", "U035CAQE34H"),  # John McGue
-)
-SLACK_PLAYERS = {p.slack_id: p for p in PLAYERS}
 
 # What the headless run may do without asking: every civ6 game tool, and the
 # BBG lookup CLAUDE.md describes (curl the leaders page into the scratchpad,
@@ -470,27 +451,6 @@ def run_claude(prompt: str, claude: str, report: Report) -> str:
     return f"{reply}\n\n_{minutes(elapsed)} · session `{session}`_"
 
 
-def same_name(a: str, b: str) -> bool:
-    """Hotseat names compare without surrounding quotes or case: '"John"' is John."""
-    def norm(name: str) -> str:
-        return name.strip().strip("\"'“”‘’").strip().casefold()
-
-    return norm(a) == norm(b)
-
-
-def player_named(name: str) -> Player | None:
-    return next((p for p in PLAYERS if same_name(p.name, name)), None)
-
-
-def duration(seconds: float) -> str:
-    """5400 -> '1h 30m'."""
-    hours, mins = divmod(int(seconds // 60), 60)
-    parts = [f"{hours}h"] if hours else []
-    if mins or not hours:
-        parts.append(f"{mins}m")
-    return " ".join(parts)
-
-
 def turn_status(rec: turn_logger.TurnRecord, worked: float, whose: str) -> str:
     """'It's your turn (Poundmaker, turn 64) since Mon 26 Oct 10:05: 1h 10m of workday time so far.'"""
     return (
@@ -618,6 +578,7 @@ def register(app: App, claude: str, lock: TurnLock) -> None:
             name=sender.name, leader=rec.leader_display, turn=rec.turn, text=text, slack_format=SLACK_FORMAT
         )
         run_with_progress(client, channel, thread_ts, prompt, claude)
+        turn_announcer.announce(client)
 
     def timed_out_turn(sender: Player, owner: Player | None, rec, worked: float, reply, client):
         """Another player: play the turn from a fixed prompt once its timer has run out."""
@@ -657,6 +618,7 @@ def register(app: App, claude: str, lock: TurnLock) -> None:
             run_with_progress(client, dm, None, prompt, claude)
         else:
             log.info("reply for %s (not on Slack):\n%s", name, run_claude(prompt, claude, log_step))
+        turn_announcer.announce(client)
         current = whose_turn()
         after = current[0] if current else None
         if after is not None and after.key != rec.key:

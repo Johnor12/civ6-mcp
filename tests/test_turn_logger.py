@@ -37,6 +37,24 @@ class TestWorkdayHours:
         assert turn_logger.workday_seconds(_at(0, 18), _at(1, 9)) == 0
         assert turn_logger.workday_seconds(_at(1, 10), _at(0, 10)) == 0
 
+    def test_deadline_inside_one_day(self):
+        assert turn_logger.workday_deadline(_at(0, 10), 3600) == _at(0, 11)
+        assert turn_logger.workday_deadline(_at(0, 10), 0) == _at(0, 10)
+
+    def test_deadline_starts_counting_at_nine(self):
+        assert turn_logger.workday_deadline(_at(0, 7), 3600) == _at(0, 10)
+        assert turn_logger.workday_deadline(_at(0, 20), 0) == _at(1, 9)
+
+    def test_deadline_skips_nights_and_weekends(self):
+        # Friday 16:30: half an hour on Friday, the rest on Monday.
+        assert turn_logger.workday_deadline(_at(4, 16, 30), 2 * 3600) == _at(7, 10, 30)
+        assert turn_logger.workday_deadline(_at(0, 16), 3600) == _at(0, 17)
+
+    def test_deadline_inverts_workday_seconds(self):
+        for start in (_at(0, 8), _at(2, 13, 17), _at(4, 16, 59), _at(5, 12)):
+            for seconds in (0, 60, 3600, 7200, 30000):
+                assert turn_logger.workday_seconds(start, turn_logger.workday_deadline(start, seconds)) == seconds
+
     def test_is_workday(self):
         assert turn_logger.is_workday(_at(0, 9))
         assert turn_logger.is_workday(_at(4, 16, 59))

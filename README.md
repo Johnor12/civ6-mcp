@@ -108,9 +108,9 @@ turn active and `begin_standin_turn` refuses it.
 `scripts/slack_bot.py` lets the players get a turn played from Slack
 instead of someone typing into Claude Code. It runs on the game PC and
 connects over Socket Mode (an outbound websocket, no public URL). Only the
-players hard-coded in `PLAYERS` (Slack user ID and hotseat player name) may
-use it; anyone else gets a joke reply and nothing runs. Each message is
-checked against whose turn the game is on:
+players hard-coded in `PLAYERS` in `scripts/players.py` (Slack user ID and
+hotseat player name) may use it; anyone else gets a joke reply and nothing
+runs. Each message is checked against whose turn the game is on:
 
 - **Your own turn: DM the bot your note** (`finish the campus, no wars`).
   It replies with your turn and how long it has lasted, then runs
@@ -125,14 +125,14 @@ checked against whose turn the game is on:
 
 ```bash
 cp .env.example .env      # bot token, app token
-uv run scripts/start.py   # the turn logger and the bot, side by side
+uv run scripts/start.py   # the turn logger, the turn announcer and the bot
 ```
 
 The Slack app needs Socket Mode on, an app-level token with
 `connections:write`, the bot scopes `app_mentions:read`, `im:history`,
-`im:write` and `chat:write`, the bot events `app_mention` and `message.im`,
-the Messages tab enabled under App Home (for DMs), and an invite to the
-channel.
+`im:write`, `chat:write` and `channels:history`, the bot events
+`app_mention` and `message.im`, the Messages tab enabled under App Home
+(for DMs), and an invite to #proj-diplomatic-relations.
 
 - **Turn timer.** `scripts/turn_logger.py` asks the game whose turn it is
   every 5 minutes (through `hotseat.whose_turn`; the MCP server itself
@@ -142,6 +142,15 @@ channel.
   game once more, so a turn ended a minute ago counts. A turn's clock
   starts at its first row; when the game is not loaded the bot goes by the
   last row.
+- **Turn pings and reminders.** `scripts/turn_announcer.py` runs the same
+  check every 5 minutes and @'s the player whose turn it is in
+  #proj-diplomatic-relations: "it's your turn" when the turn begins (unless
+  someone already @'d them there since), a reminder after 1 hour of workday
+  time, and after 2 hours a last one saying any other player can now have
+  the turn played through the bot. The bot calls it right after each of its
+  runs, so a turn the bot ended reaches the next player at once; a turn
+  ended at the PC is noticed within 5 minutes. The bot itself only answers
+  messages.
 - **Live progress.** The bot's first reply is edited every few seconds with
   the elapsed time, one line per game action ("Warrior: move → (37,40)",
   "Research: Pottery", the end-turn result), Claude's narration and failed
