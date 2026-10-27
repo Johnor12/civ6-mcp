@@ -109,9 +109,11 @@ The games run the [Better Balanced Game](https://civ6bbg.github.io/en_US/leaders
 mod (BBG 7.5.1, Steam Workshop 2865001760) with Better Balanced Maps. BBG
 changes most leader and civ abilities, unique units and improvements,
 policies and beliefs, so the agent cannot rely on vanilla Civ 6 knowledge.
-`CLAUDE.md` tells it to look up the seated civilization's BBG entry before
-planning a turn, let that kit drive its choices, and write the kit into the
-player's diary on the first stand-in. The game tools read units, districts
+The turn briefing includes the seated civilization's BBG kit from
+`src/civ_mcp/data/bbg_leaders.json` (bundled, so no web access is needed);
+`CLAUDE.md` tells the agent to let that kit drive its choices and to write it
+into the player's diary on the first stand-in. Rebuild the data for new
+players or a new BBG version with `scripts/extract_bbg.py`. The game tools read units, districts
 and buildings from the running game's own tables, so their numbers already
 include the mod. When BBG updates, change the version in the links in
 `CLAUDE.md` and here.

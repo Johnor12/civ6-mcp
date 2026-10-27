@@ -22,8 +22,8 @@ query what you need before deciding.
    shows someone else: never play a different player than the one named.
    Its reply is the **turn briefing**: overview, the last diary entry,
    notifications, pending deals, cities, units and the world snapshot.
-3. Read the briefing and the civilization's BBG kit (see Better Balanced
-   Game), then run the turn loop below. `get_turn_briefing`
+3. Read the briefing, including the civilization's BBG kit (see Better
+   Balanced Game), then run the turn loop below. `get_turn_briefing`
    returns a fresh briefing mid-turn; `get_diary` has older entries.
 4. `end_turn` exactly once when the turn is done. It refuses while a
    diplomacy encounter or incoming deal is open, while a blocker remains,
@@ -54,25 +54,27 @@ The games run the **Better Balanced Game** mod (BBG 7.5.1, Steam Workshop
 abilities, unique units, improvements and buildings, policies, pantheons
 and beliefs, so what you know about vanilla Civ 6 is often wrong here.
 
-Before planning a player's turn, read their civilization's BBG entry: civ
-ability, leader ability, unique unit, unique infrastructure, start bias.
-Let it drive the turn: build order, research and civic path, where to
-settle, what to improve, which districts to place where. On the first
-stand-in for a player, write the kit into the diary's strategic field so
-later stand-ins have it without the lookup.
+The turn briefing has a **Civilization kit (BBG)** section: the seated
+leader's civ ability, leader ability, unique unit and unique infrastructure,
+including the start bias. It comes from data bundled with the repo, so no
+web access is needed. Read it before planning the turn and let it drive the
+turn: build order, research and civic path, where to settle, what to
+improve, which districts to place where. On the first stand-in for a player,
+write the kit into the diary's strategic field so later stand-ins have it
+without a lookup. If the section says there is no bundled entry, rely on the
+game tools.
+
+For other BBG pages, an operator in an interactive session can look them up
+online (Slack-triggered runs have no web access):
 
 - Leaders and civs: https://civ6bbg.github.io/en_US/leaders_7.5.html. The
   other pages follow the same pattern: `units_`, `buildings_`,
   `improvements_`, `policies_`, `religion_`, `governor_`, `great_people_`,
   `city_states_`, `tech_tree_`, `civic_tree_`, `world_wonder_`,
   `natural_wonder_`, `changelog_7.5.html`.
-- The leaders page is about 1 MB. WebFetch reads 100k characters per call
-  and most civs are far down the page, so download it with curl into the
-  scratchpad and extract the one entry. It starts at a comment such as
-  `<!--LOC_CIVILIZATION_NUBIA_NAME LOC_LEADER_AMANITORE_NAME-->`; the BBG
-  text of each ability is the element with class `actual-text`. The
-  `base-game-text` block after it repeats that text beside the vanilla
-  version for comparison.
+- The leaders page is about 1 MB: download it with curl and extract the one
+  entry rather than using WebFetch. `scripts/extract_bbg.py` does this for
+  the leaders in play.
 
 The game tools read units, districts and buildings from the running game's
 tables, so their numbers already include BBG. When they disagree with the

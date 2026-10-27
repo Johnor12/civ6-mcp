@@ -1,0 +1,241 @@
+{
+ "LEADER_CLEOPATRA": {
+  "title": "Egypt Cleopatra (Egyptian)",
+  "abilities": [
+   {
+    "name": "Iteru",
+    "text": "+15% Production towards districts and wonders if placed next to a River. Does not receive damage from Floods.\n- Bias: T2 Floodplains, T5 Rivers"
+   },
+   {
+    "name": "Mediterranean's Bride",
+    "text": "Your Trade Routes to other civilizations provide +6 Gold for Egypt. Other civilizations' Trade Routes to Egypt provide +1 Food for them and +2 Gold for Egypt. Trading with Allies earns twice as many bonus Alliance Points.\n+15% production toward Commercial Hubs and Theater Squares when the city is settled on a river."
+   },
+   {
+    "name": "Sphinx",
+    "text": "Egyptian unique builder improvement unlocked with Craftsmanship. Cannot be built next to another Sphinx. Cannot be built on Snow tiles.\n+1 Culture and +2 Faith.\n+1 Food on Plains tiles. +1 Production on Grassland tiles.\n+1 Culture if built on Floodplains.\n+1 Culture with Diplomatic Service.\n+1 Faith and +1 Culture if built next to a wonder.\n+1 Food and +1 Production if built on Desert (not Floodplains) or Desert Hills.\n+2 Appeal to adjacent tiles.\nProvides Tourism after researching Flight."
+   },
+   {
+    "name": "Maryannu Chariot Archer",
+    "text": "Egyptian unique Ancient era ranged cavalry unit. 4 Movement when starting in open terrain.\nUnlocked by Masonry Technology"
+   }
+  ]
+ },
+ "LEADER_CLEOPATRA_ALT": {
+  "title": "Egypt Cleopatra (Ptolemaic)",
+  "abilities": [
+   {
+    "name": "Iteru",
+    "text": "+15% Production towards districts and wonders if placed next to a River. Does not receive damage from Floods.\n- Bias: T2 Floodplains, T5 Rivers"
+   },
+   {
+    "name": "Arrival of Hapi",
+    "text": "Military units can cross rivers without movement or combat penalty starting in the classical era.\n+15% production bonus for Campuses and Encampments when the city is settled on a river. Campus and Encampments receive major Science adjacency from rivers."
+   },
+   {
+    "name": "Sphinx",
+    "text": "Egyptian unique builder improvement unlocked with Craftsmanship. Cannot be built next to another Sphinx. Cannot be built on Snow tiles.\n+1 Culture and +2 Faith.\n+1 Food on Plains tiles. +1 Production on Grassland tiles.\n+1 Culture if built on Floodplains.\n+1 Culture with Diplomatic Service.\n+1 Faith and +1 Culture if built next to a wonder.\n+1 Food and +1 Production if built on Desert (not Floodplains) or Desert Hills.\n+2 Appeal to adjacent tiles.\nProvides Tourism after researching Flight."
+   },
+   {
+    "name": "Maryannu Chariot Archer",
+    "text": "Egyptian unique Ancient era ranged cavalry unit. 4 Movement when starting in open terrain.\nUnlocked by Masonry Technology"
+   }
+  ]
+ },
+ "LEADER_VICTORIA_ALT": {
+  "title": "England Victoria (Age of Steam)",
+  "abilities": [
+   {
+    "name": "Workshop of the World",
+    "text": "Iron and Coal Mines accumulate 2 more resources per turn. Harbor buildings increase Strategic Resource Stockpiles by +10 (on Standard speed). +100% Production towards Military Engineers. Military Engineers receive +2 charges. Buildings that provide additional yields when Powered receive +3 of that yield.\n- Bias: T1 Coast, T5 Iron and Coal."
+   },
+   {
+    "name": "Age of Steam",
+    "text": "+5% Production in Cities for each Factory and Power Plant in that city.Industrial Zones receive standard adjacency from Royal Navy Dockyards. +20% Production towards Industrial Zone buildings.\n+1 Production to all improved Strategic Resources.\nLighthouse grants +1 Great Engineer point per turn."
+   },
+   {
+    "name": "Royal Navy Dockyard",
+    "text": "A district unique to England for naval activity in your city. Replaces the Harbor district. Also removes the Movement penalty for embarking and disembarking to and from this tile. Must be built on Coast or Lake Terrain adjacent to land.\n+1 Movement for all naval units built in Dockyard\n+2 Gold as adjacency and +4 Loyalty per turn when built on a foreign continent. Cannot be built on Reef."
+   },
+   {
+    "name": "Longbowman",
+    "text": "English unique Medieval Era Ranged unit that replaces the Crossbowman. +4 Combat Strength if adjacent to another Longbowman unit.\nUnlocked by Medieval Faires Civic"
+   }
+  ]
+ },
+ "LEADER_GITARJA": {
+  "title": "Indonesia Gitarja",
+  "abilities": [
+   {
+    "name": "Great Nusantara",
+    "text": "Coast and Lake tiles provide a minor adjacency bonus for Campus, Theater Square, Holy Site, and Industrial Zone districts. +1 Amenity from entertainment to each Entertainment Complex adjacent to a Coast or Lake tile.\n- Bias: T1 Coast."
+   },
+   {
+    "name": "Exalted Goddess of the Three Worlds",
+    "text": "Naval units and Harbor buildings can be purchased with Faith. Religious units pay no movement to embark or disembark.\nAfter unlocking Sailing, City Centers next to Coast and Lake tiles provide +2 Faith and other Districts next to Coast and Lake tiles provide +1 Faith, increasing to +2 Faith when Shipbuilding is unlocked."
+   },
+   {
+    "name": "Kampung",
+    "text": "Indonesian unique builder improvement unlocked at Shipbuilding. Must be placed on a Coast or Lake tile adjacent to a sea resource.\n+1 Production and +1 Housing.\n+1 Food and +1 Faith for each adjacent Fishing Boat.\n+1 Production with Civil Engineering.\n+1 Housing with Mass Production.\nProvides Tourism from Food after researching Flight."
+   },
+   {
+    "name": "Jong",
+    "text": "Indonesian unique Renaissance era naval unit that replaces the Frigate. Formation units all inherit escort's Movement speed and +5 Combat Strength when in a formation.\nUnlocked by Exploration Civic"
+   }
+  ]
+ },
+ "LEADER_NZINGA_MBANDE": {
+  "title": "Kongo Nzinga Mbande",
+  "abilities": [
+   {
+    "name": "Nkisi",
+    "text": "Artifacts, Sculptures, and Relics grant +2 Food, +2 Production, +4 Gold and +2 Faith. Palace has slots for 5 Great Works. Receive a Relic when completing each Government Plaza building.\nReceive 50% more Great Writer, Great Artist, and Great Musician points. +100% Production to Archaeologists.\n- Bias: T3 Rainforest, T5 Woods."
+   },
+   {
+    "name": "Queen of Ndongo and Matamba",
+    "text": "+15% Gold and 15% Culture in cities with a Mbanza (does not stack with multiples). Mbanza provides +2 adjacency to Theater Squares and Commercial Hubs. Archaeologists are 50% cheaper to purchase.\nAll civilian units ignore the Rainforest and Woods Movement penalty.\nReceive 50% more Great Merchant points."
+   },
+   {
+    "name": "Mbanza",
+    "text": "A district unique to Kongo that can only be constructed in Rainforest or Woods. Replaces the Neighborhood district but is available earlier and cheaper to build. Provides +5 Housing, +2 Food, and +4 Gold, regardless of Appeal."
+   },
+   {
+    "name": "Ngao Mbeba",
+    "text": "Kongo unique Classical era unit that replaces the Swordsman. +10 Combat Strength when defending against ranged attacks. Can see through Woods and Rainforests.\nUnlocked by Iron Working Technology"
+   }
+  ]
+ },
+ "LEADER_GENGHIS_KHAN": {
+  "title": "Mongolia Genghis Khan",
+  "abilities": [
+   {
+    "name": "Örtöö",
+    "text": "All Mongolian units double the usual Combat Bonus for having a higher level of Diplomatic Visibility than their opponent. Starting a Trade Route immediately creates a Trading Post in the destination city.\n- Bias: T4 Horses."
+   },
+   {
+    "name": "Mongol Horde",
+    "text": "Light cavalry units and Keshig gain +3 Combat Strength and a chance to capture defeated enemy cavalry class units."
+   },
+   {
+    "name": "Ordu",
+    "text": "A building unique to Mongolia. Grants an ability that gives +1 Movement to Heavy and Light Cavalry trained in this city. +25% combat experience for all cavalry and siege class units trained in this city.\nStrategic Resource Stockpiles increased +10 (on Standard Speed).\nMay not be built in an Encampment district that already has a Barracks."
+   },
+   {
+    "name": "Keshig",
+    "text": "Mongolian unique Medieval Era Ranged Cavalry unit. Can escort moving civilian and support units at their higher Movement speed.\nUnlocked by Stirrups Technology"
+   }
+  ]
+ },
+ "LEADER_AMANITORE": {
+  "title": "Nubia Amanitore",
+  "abilities": [
+   {
+    "name": "Ta-Seti",
+    "text": "+30% Production toward Ranged and Naval Ranged units. All Ranged and Naval Ranged units gain +50% combat experience. Mines over strategic resources provide +1 Production. Mines over bonus and luxury resources provide +2 Gold.\n- Bias: T2 Plains, T5 Minable Resources."
+   },
+   {
+    "name": "Kandake of Meroë",
+    "text": "+20% Production towards all districts, increasing to +40% Production if there is a Nubian Pyramid in the city."
+   },
+   {
+    "name": "Nubian Pyramid",
+    "text": "Nubian unique builder improvement unlocked at Craftsmanship and limited to 1 per city. Nubian Districts receive standard adjacency from Nubian Pyramids. Can be built on any flat tile or desert hill. Cannot be built next to another Nubian Pyramid.\n+2 Food and +2 Faith.\nReceives additional yields from adjacent districts:\n+1 Food for the City Center.\n+1 Science per adjacent Campus.\n+1 Culture per adjacent Theater Square.\n+1 Faith per adjacent Holy Site.\n+1 Gold per adjacent Commercial Hub and Harbor.\n+1 Production per adjacent Industrial Zone, Encampment, and Aerodrome.\n+1 Culture and +2 Gold per adjacent Government Plaza and Diplomatic Quarter."
+   },
+   {
+    "name": "Pítati Archer",
+    "text": "Nubian unique Ancient era unit that replaces the Archer. Stronger than the Archer with extra Movement. Upgrades to Crossbowman.\nUnlocked by Archery Technology"
+   }
+  ]
+ },
+ "LEADER_JFD_STANISLAW": {
+  "title": "Poland Stanislaw II",
+  "abilities": [
+   {
+    "name": "Golden Liberty",
+    "text": "At Early Empire, One Military policy slot in the current government is converted to a Wildcard policy slot.\nCulture Bomb adjacent tiles when completing an Encampment or Fort inside friendly territory.\n- Bias: None."
+   },
+   {
+    "name": "Commission for National Education",
+    "text": "Strategic Resources and improved tiles gains bonus yields next to Encampment and its buildings (do not stacks) :\n- District : +1 Food\n- Barracks and Stable : +1 Culture\n- Armory : +1 Science\n- Military Academy : +1 Production.\nGain the Uhlan unique unit when they research the Metal Casting technology."
+   },
+   {
+    "name": "Sukiennice",
+    "text": "A building unique to Poland. International Trade Routes from this city gain +2 Production; domestic Trade Routes gain +4 Gold. +1 Trade Route capacity, if this city does not yet have a Lighthouse building."
+   },
+   {
+    "name": "Uhlan",
+    "text": "Polish unique Renaissance era unit that replaces the Cavalry when Stanislaw II is their leader. Receives a combat bonus when flanking.\nUnlocked by Metal Casting Technology"
+   },
+   {
+    "name": "Winged Hussar",
+    "text": "Polish unique Renaissance era unit that replaces the Cuirassier. Pushes defending enemy units back from their hex in any battle where they score more damage. Defenders that cannot retreat suffer additional damage.\nUnlocked by Reformed Church Civic"
+   }
+  ]
+ },
+ "LEADER_JULIUS_CAESAR": {
+  "title": "Rome Julius Caesar",
+  "abilities": [
+   {
+    "name": "All Roads Lead to Rome",
+    "text": "All cities you found or conquer start with a Trading Post. If in Trade Route range of your Capital, they also start with a road to it. Your Trade Routes earn +1 Gold for passing through Trading Posts in your own cities.\n- Bias: None."
+   },
+   {
+    "name": "Veni, Vidi, Vici",
+    "text": "Melee, Siege, Ranged and Heavy Cavalry units receive +50% Combat Experience, increasing to +100% when entering the medieval era. These units receive +1 Combat Strength per promotion received.\nReceive a free melee unit each time you found a non-capital city and in your capital after researching Code of Laws.\nGain an extra Wildcard Policy slot when capturing and retaining at least one city founded by a major civilization and owned by a major civilization at the time of capture (maximum 1 extra wildcard slot).\nGain the Onager unique unit when Engineering is researched."
+   },
+   {
+    "name": "Bath",
+    "text": "A district unique to Rome for city growth. Replaces the Aqueduct district and cheaper to build.\nIt provides this city with a source of fresh water from an adjacent River, Lake, Oasis, or Mountain. Cities that do not yet have existing fresh water receive up to 6 Housing. Cities that already have existing fresh water will instead get +2 Housing. Must be built adjacent to the City Center. In either case, the Bath provides an additional bonus of +2 Housing. +1 Culture from every adjacent districts. Must be built adjacent to the City Center."
+   },
+   {
+    "name": "Legion",
+    "text": "Roman unique Classical era melee unit that replaces the Swordsman. Has 1 charge to build a Roman Fort.\nUnlocked by Iron Working Technology"
+   },
+   {
+    "name": "Onager",
+    "text": "Roman unique Classical era Catapult replacement when Rome is lead by Caesar. Starts with a free promotion.\nUnlocked by Engineering Technology"
+   }
+  ]
+ },
+ "LEADER_SUK_AL_HASAN": {
+  "title": "Swahili Al-Hasan ibn Sulaiman",
+  "abilities": [
+   {
+    "name": "Coral Construction",
+    "text": "Coastal cities gain +25% Production toward districts.\n+1 Production for unimproved reef tiles with Sailing.\nBias: T1 Coast."
+   },
+   {
+    "name": "Palace of Husuni Kubwa",
+    "text": "Trade Route capacity +1 for each Harbor adjacent to a World Wonder."
+   },
+   {
+    "name": "Pillar Tomb",
+    "text": "Replaces the Monument.\n+1 Culture,\n+1 Loyalty. If Loyalty is already at maximum, +1 Culture.\n+2 Gold and +1 Science for outgoing International Trade Routes for every 2 districts within 2 tiles of the City Center (maximum 6 districts)."
+   },
+   {
+    "name": "Jahazi",
+    "text": "Swahili unique ancient era support naval unit can set up a fishing boat, which will provide +2 Gold (2 Charges). Units embarked within 2 tiles gain 1 Movement Point and ignore terrain costs. Can be captured.\nUnlocked by Sailing Technology"
+   }
+  ]
+ },
+ "LEADER_LIME_THULE_DAVE": {
+  "title": "Thule Kiviuq",
+  "abilities": [
+   {
+    "name": "Hunting of the Bowhead",
+    "text": "Builders can consume one Charge and one Citizen to create a Whales tile.\nCity Centers adjacent to a Hunter's House receive +1 Food. At sailing, tundra tiles adjacent to a Hunter's House receive +1 Food (doubled for snow). Adjacent Camps and Fishing boats receive +1 Food and +1 Production. A tile may only benefit from a single Hunter's House.\nBias: T1 Tundra, T2 Coast."
+   },
+   {
+    "name": "Heart Not Stone",
+    "text": "+5 Combat Strength and +1 Movement for Recon units starting their turn on Tundra or Snow tiles."
+   },
+   {
+    "name": "Hunter's House",
+    "text": "Unique improvement for Thule.\n+1 Housing\n+1 Food if built on a Tundra tile (doubled on snow)\n+1 Culture and +1 Faith for each adjacent sea resource and Camp tile after Foreign Trade.\nMust be built adjacent to a resource tile. Can be placed on forests. Cannot be placed next to another Hunter's House."
+   },
+   {
+    "name": "Dogsled Hunter",
+    "text": "Thule unique Ancient era ranged Recon unit, replaces the Scout.\nHas 1 Charge to establish a Hunter's House."
+   }
+  ]
+ }
+}

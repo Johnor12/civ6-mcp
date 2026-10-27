@@ -18,6 +18,7 @@ from typing import Any, AsyncIterator, Awaitable, Callable, Optional
 
 from mcp.server.fastmcp import Context, FastMCP
 
+from civ_mcp import bbg as _bbg
 from civ_mcp import diary as _diary
 from civ_mcp import hotseat as _hotseat
 from civ_mcp import narrate as nr
@@ -300,7 +301,19 @@ async def _turn_briefing(s: Session) -> str:
             text += "\n\n" + _standin.status_text(cfg)
         return text
 
+    async def kit_text() -> str:
+        cfg = _standin.active_config()
+        leader = cfg.leader if cfg is not None else ""
+        kit = _bbg.kit_for(leader) if leader else None
+        if kit is not None:
+            return kit
+        return (
+            f"No bundled BBG entry for {leader or 'this leader'}. Rely on the game "
+            "tools, whose numbers already include BBG."
+        )
+
     await section("Overview", overview_text)
+    await section("Civilization kit (BBG)", kit_text)
     await section("Diary (last entry)", diary_text)
     await section(
         "Notifications", lambda: _narrate(gs.get_notifications, nr.narrate_notifications)
