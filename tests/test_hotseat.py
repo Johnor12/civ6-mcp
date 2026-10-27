@@ -93,6 +93,31 @@ class TestParsing:
         assert "POUNDMAKER 63 150 AD" in hotseat._load_lua("POUNDMAKER 63 150 AD")
 
 
+class TestWhoseTurn:
+    def test_turn_active_or_turn_change_screen(self):
+        conn = _FakeBridge()
+        conn.replies.append(("HS|", [_hs_line(controls=False)]))
+        assert _run(hotseat.whose_turn(conn)).player_name == "Ray"
+        conn.replies[0] = ("HS|", [_hs_line(active=False, controls=True)])
+        assert _run(hotseat.whose_turn(conn)).leader == "LEADER_POUNDMAKER"
+
+    def test_no_turn_up(self):
+        conn = _FakeBridge()
+        conn.replies.append(("HS|", [_hs_line(active=False, controls=False)]))  # between players
+        assert _run(hotseat.whose_turn(conn)) is None
+        conn.replies[0] = ("HS|", [_hs_line(hotseat=False)])
+        assert _run(hotseat.whose_turn(conn)) is None
+        assert _run(hotseat.whose_turn(_FakeBridge(where="frontend"))) is None
+        assert _run(hotseat.whose_turn(_FakeBridge(where=None))) is None
+
+    def test_no_game_does_not_raise(self, monkeypatch):
+        async def refuse(self):
+            raise ConnectionError("Is Civ 6 running?")
+
+        monkeypatch.setattr(hotseat.BridgeConnection, "connect", refuse)
+        assert _run(hotseat.whose_turn()) is None
+
+
 class TestAcceptTurn:
     def test_accept_turn_dismisses_and_reports(self):
         conn = _FakeBridge()

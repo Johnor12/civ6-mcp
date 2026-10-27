@@ -172,6 +172,36 @@ class TestRoundTrip:
             _run(conn.execute("nobody home", timeout=0.3))
         assert not conn.is_connected
 
+    def test_a_newer_connection_does_not_shut_out_an_older_one(self, fake_game):
+        # The mod runs only a sequence number above the last one it ran,
+        # whoever sent it. Another process (a second MCP server, the Slack
+        # bot's turn poller) must not make this connection's commands stale.
+        conn, mod = fake_game
+        mod.replies["hello"] = ["O|hi"]
+        _run(conn.connect())
+        other = bridge.BridgeConnection(mods_dir=conn.cmd_path.parents[2], lua_log=conn.lua_log)
+        other.poll_interval = 0.005
+        _run(other.connect())
+        assert _run(other.execute('print("hello")')) == ["hi"]
+        assert _run(conn.execute('print("hello")', timeout=2.0)) == ["hi"]
+
+    def test_one_command_at_a_time_across_connections(self, fake_game):
+        conn, mod = fake_game
+        mod.replies["hello"] = ["O|hi"]
+        _run(conn.connect())
+        other = bridge.BridgeConnection(mods_dir=conn.cmd_path.parents[2], lua_log=conn.lua_log)
+        other.poll_interval = 0.005
+        other.lock_wait = 0.2
+        other._connected = True
+
+        async def while_held():
+            async with conn._exclusive():
+                with pytest.raises(ConnectionError, match="stayed locked"):
+                    await other.execute('print("hello")')
+
+        _run(while_held())
+        assert _run(other.execute('print("hello")')) == ["hi"]
+
     def test_overwritten_command_is_resent(self, tmp_path):
         mods = tmp_path / "Mods"
         bridge.install_mod(mods)

@@ -103,6 +103,61 @@ autosave at turn change, or a save from the turn-change screen's own Save
 Game button. A save made by the previous player still has that player's
 turn active and `begin_standin_turn` refuses it.
 
+## Starting a turn from Slack
+
+`scripts/slack_bot.py` lets the players get a turn played from Slack
+instead of someone typing into Claude Code. It runs on the game PC and
+connects over Socket Mode (an outbound websocket, no public URL). Only the
+players hard-coded in `PLAYERS` (Slack user ID and hotseat player name) may
+use it; anyone else gets a joke reply and nothing runs. Each message is
+checked against whose turn the game is on:
+
+- **Your own turn: DM the bot your note** (`finish the campus, no wars`).
+  It replies with your turn and how long it has lasted, then runs
+  `claude -p` in the repo root to play it with your message as the note.
+  Mentioning the bot in a channel on your own turn only gets "DM me", since
+  the other players read the channel.
+- **Someone else's turn: DM or mention the bot with anything.** Once that
+  turn has lasted 2 hours of workday time (9:00–17:00, Mon–Fri), Claude plays
+  it from a fixed prompt: what you wrote never reaches Claude. The absent
+  player gets the progress and Claude's report by DM; you only hear whose
+  turn it is afterwards. Before the 2 hours are up you get the timer.
+
+```bash
+cp .env.example .env      # bot token, app token
+uv run scripts/start.py   # the turn logger and the bot, side by side
+```
+
+The Slack app needs Socket Mode on, an app-level token with
+`connections:write`, the bot scopes `app_mentions:read`, `im:history`,
+`im:write` and `chat:write`, the bot events `app_mention` and `message.im`,
+the Messages tab enabled under App Home (for DMs), and an invite to the
+channel.
+
+- **Turn timer.** `scripts/turn_logger.py` asks the game whose turn it is
+  every 5 minutes (through `hotseat.whose_turn`; the MCP server itself
+  records nothing) and appends a row to `scripts/data/turn_log.jsonl` when
+  the turn or the player changed. The bot reads the log with
+  `turn_logger.duration_of_current_turn()`, after having the logger ask the
+  game once more, so a turn ended a minute ago counts. A turn's clock
+  starts at its first row; when the game is not loaded the bot goes by the
+  last row.
+- **Live progress.** The bot's first reply is edited every few seconds with
+  the elapsed time, one line per game action ("Warrior: move → (37,40)",
+  "Research: Pottery", the end-turn result), Claude's narration and failed
+  actions. Game queries and doc lookups only change a "now" line under the
+  list. The console logs the same lines; the final reply is a new message.
+- **One run at a time.** A message during a run gets a busy reply; a run is
+  killed after 90 minutes.
+- **Tight permissions.** The headless run may use the civ6 tools and fetch
+  the BBG docs (`curl`, WebFetch on civ6bbg.github.io, Read/Grep/Glob);
+  everything else is denied, including reading `.env` and the diaries in
+  `~/.civ6-mcp`. The Slack tokens are not passed to it.
+- **Sharing the bridge.** The turn logger, each run's MCP server and any
+  Claude Code window open in this repo all write the one bridge command
+  file. A lock file next to it lets one command through at a time, and
+  sequence numbers follow the clock, so none of them is shut out by another.
+
 ## Better Balanced Game
 
 The games run the [Better Balanced Game](https://civ6bbg.github.io/en_US/leaders_7.5.html)

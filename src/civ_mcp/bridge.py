@@ -20,6 +20,12 @@ The mod runs in two UI contexts: ``InGame`` (a loaded game) and
 because the mod rides on the game's Test context, see
 ``mods/MCPBridge/UI/Test.lua``). Only the UI Lua state exists, so every
 query runs there; GameCore-only APIs are pcall-guarded in the builders.
+
+Several processes can drive the bridge at once: the MCP server of each
+Claude Code session and the Slack bot's turn poller. A lock file next to the
+command file lets one command through at a time, and sequence numbers come
+from the wall clock, so a command from any of them is newer than every
+command the mod has already run.
 """
 
 from __future__ import annotations
@@ -27,10 +33,12 @@ from __future__ import annotations
 import asyncio
 import ctypes
 import logging
+import msvcrt
 import os
 import re
 import shutil
 import time
+from contextlib import asynccontextmanager
 from ctypes import wintypes
 from pathlib import Path
 
@@ -169,13 +177,15 @@ class BridgeConnection:
     poll_interval = 0.05  # seconds between Lua.log reads while waiting
     default_timeout = 8.0  # the mod polls every 0.2 s
     resend_after = 0.5  # seconds without a reply before checking the command file
+    lock_wait = 30.0  # seconds to wait for another process's command to finish
 
     def __init__(self, mods_dir: Path | None = None, lua_log: Path | None = None):
         self.cmd_path = installed_mod_dir(mods_dir) / "UI" / CMD_FILE_NAME
+        self.lock_path = self.cmd_path.with_suffix(".lock")
         self.lua_log = lua_log or default_lua_log()
         self._tail = _LogTail(self.lua_log)
         self._lock = asyncio.Lock()
-        self._seq = int(time.time() * 1000)
+        self._seq = 0
         self._connected = False
         self._last_command: tuple[str | None, str] = (None, "")
         self.last_context: str = ""  # Lua.log context that answered the last command
@@ -194,7 +204,8 @@ class BridgeConnection:
         if not self.lua_log.exists():
             raise ConnectionError(f"Lua.log not found at {self.lua_log}. Is Civ 6 running?")
         self._tail.seek_end()
-        self._clear_command()
+        async with self._exclusive():
+            self._clear_command()
         ctx = await self.ping(timeout=3.0)
         if ctx is None:
             raise ConnectionError(
@@ -249,14 +260,43 @@ class BridgeConnection:
     async def _run(
         self, context: str | None, lua_code: str, timeout: float
     ) -> tuple[list[str], str]:
-        self._seq += 1
-        seq = self._seq
-        self._tail.read_lines()  # drain whatever was logged since the last command
-        self._write_command(seq, context, lua_code)
+        async with self._exclusive():
+            # The mod only runs a sequence number higher than the last one it
+            # ran, whichever process sent that; the clock keeps them rising.
+            self._seq = max(self._seq + 1, int(time.time() * 1000))
+            seq = self._seq
+            self._tail.read_lines()  # drain whatever was logged since the last command
+            self._write_command(seq, context, lua_code)
+            try:
+                return await self._collect(seq, timeout)
+            finally:
+                self._clear_command()
+
+    @asynccontextmanager
+    async def _exclusive(self):
+        """Hold the command file for one command, against every other process."""
+        fd = os.open(self.lock_path, os.O_RDWR | os.O_CREAT)
         try:
-            return await self._collect(seq, timeout)
+            deadline = time.monotonic() + self.lock_wait
+            while True:
+                try:
+                    msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+                    break
+                except OSError:
+                    if time.monotonic() >= deadline:
+                        raise ConnectionError(
+                            f"MCP Bridge: {self.lock_path} stayed locked for "
+                            f"{self.lock_wait:.0f}s; another MCP server or the Slack "
+                            "bot is stuck on a command."
+                        ) from None
+                    await asyncio.sleep(0.02)
+            try:
+                yield
+            finally:
+                os.lseek(fd, 0, os.SEEK_SET)
+                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
         finally:
-            self._clear_command()
+            os.close(fd)
 
     async def _collect(self, seq: int, timeout: float) -> tuple[list[str], str]:
         deadline = time.monotonic() + timeout

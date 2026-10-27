@@ -192,6 +192,26 @@ async def status(conn: BridgeConnection) -> HotseatStatus:
     return HotseatStatus(screen="none")
 
 
+async def whose_turn(conn: BridgeConnection | None = None) -> HotseatStatus | None:
+    """The status of the hotseat player whose turn it is, or None when no turn is up.
+
+    None while Civ 6 is closed, at the main menu, loading, or between two
+    players. Without a connection it opens its own, so a script outside the
+    MCP server (scripts/turn_logger.py) can ask. Never raises.
+    """
+    if conn is None:
+        conn = BridgeConnection()
+        try:
+            await conn.connect()
+        except Exception as e:  # noqa: BLE001 — game not running, bridge mod missing
+            log.debug("whose_turn: no game: %s", e)
+            return None
+    st = await status(conn)
+    if st.screen != "ingame" or not st.is_hotseat or not (st.turn_active or st.turn_controls_visible):
+        return None
+    return st
+
+
 async def wait_for(conn: BridgeConnection, where: str, timeout: float) -> bool:
     """Wait until the given context ("ingame"/"frontend") answers a ping."""
     deadline = time.monotonic() + timeout
