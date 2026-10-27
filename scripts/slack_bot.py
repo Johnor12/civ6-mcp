@@ -4,6 +4,7 @@
 # dependencies = [
 #     "slack-bolt>=1.21",
 #     "python-dotenv>=1.0",
+#     "mss>=9.0",
 # ]
 # ///
 """Slack trigger for the stand-in: players message @civ6 to have Claude Code play a hotseat turn.
@@ -54,7 +55,10 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
+import screenshots  # scripts/screenshots.py, next to this script
+import slack_setup
 import turn_logger  # scripts/turn_logger.py, next to this script
+import turn_notices
 from dotenv import dotenv_values
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
@@ -67,6 +71,8 @@ REJECTION = "Deleting save, uninstalling Civilization 6, and wiping Windows."
 TURN_TIMEOUT_S = 90 * 60
 SLACK_MAX_CHARS = 3500
 TURN_LIMIT_S = 2 * 3600  # workday time after which another player may have a turn played
+DEFAULT_CHANNEL = "C09AZ6CR7QE"  # #proj-diplomatic-relations: pings, requests, results
+NOTICE_POLL_S = 60
 WORKDAY = f"{turn_logger.WORKDAY_START_HOUR}:00–{turn_logger.WORKDAY_END_HOUR}:00, Mon–Fri"
 
 
@@ -536,7 +542,179 @@ def run_with_progress(client, channel: str, thread_ts: str | None, prompt: str, 
     client.chat_postMessage(channel=channel, thread_ts=thread_ts, text=result)
 
 
-def register(app: App, claude: str, lock: TurnLock) -> None:
+@dataclass
+class Services:
+    """What the Slack flows share: the result channel, approvals and screenshots."""
+
+    channel: str = DEFAULT_CHANNEL
+    notices: turn_notices.TurnNotices | None = None
+    approvals_needed: int = turn_notices.APPROVALS_NEEDED
+    uploads: bool = True  # the app has files:write
+
+    def __post_init__(self) -> None:
+        self.notices = self.notices or turn_notices.TurnNotices()
+
+
+def key_of(rec: turn_logger.TurnRecord) -> str:
+    return turn_notices.turn_key(rec.turn, rec.leader, rec.player)
+
+
+def mention(player: Player | None, fallback: str) -> str:
+    return f"<@{player.slack_id}>" if player else fallback
+
+
+def request_blocks(rec, owner: Player | None, worked: float, needed: int, approvers: list[str]) -> list[dict]:
+    """The channel message that lets players approve Claude playing a late turn."""
+    name = owner.name if owner else rec.player
+    who = ", ".join(f"<@{u}>" for u in approvers) or "nobody yet"
+    text = (
+        f"{mention(owner, name)} your turn ({rec.leader_display}, turn {rec.turn}) has lasted "
+        f"{duration(worked)} of workday time, past the {duration(TURN_LIMIT_S)} limit. Claude can play it "
+        f"from a fixed prompt.\n*Approvals:* {who}. Needs {needed} players, or {name} alone."
+    )
+    return [
+        {"type": "section", "text": {"type": "mrkdwn", "text": text}},
+        {
+            "type": "actions",
+            "elements": [
+                {
+                    "type": "button",
+                    "style": "primary",
+                    "text": {"type": "plain_text", "text": "Approve"},
+                    "action_id": "civ_approve",
+                    "value": key_of(rec),
+                }
+            ],
+        },
+    ]
+
+
+def request_text(owner: Player | None, rec) -> str:
+    return f"Takeover request for {owner.name if owner else rec.player}'s turn {rec.turn}"
+
+
+def post_request(client, svc: Services, rec, owner: Player | None, worked: float) -> None:
+    """Post the approval request for this turn once, and keep its approval list current."""
+    key = key_of(rec)
+    notice = svc.notices.get(key)
+    blocks = request_blocks(rec, owner, worked, svc.approvals_needed, notice.approvers)
+    if notice.request_ts:
+        client.chat_update(channel=svc.channel, ts=notice.request_ts, text=request_text(owner, rec), blocks=blocks)
+        return
+    posted = client.chat_postMessage(channel=svc.channel, text=request_text(owner, rec), blocks=blocks)
+    svc.notices.update(key, request_ts=posted["ts"])
+
+
+def close_request(client, svc: Services, rec, owner: Player | None, note: str) -> None:
+    ts = svc.notices.get(key_of(rec)).request_ts
+    if ts:
+        client.chat_update(channel=svc.channel, ts=ts, text=f"{request_text(owner, rec)}: {note}", blocks=[])
+
+
+def notice_tick(client, svc: Services) -> None:
+    """Ping at an hour of workday time; at the limit, post the approval request."""
+    current = turn_logger.duration_of_current_turn()
+    if current is None:
+        return
+    rec, worked = current
+    owner = player_named(rec.player)
+    key = key_of(rec)
+    actions = turn_notices.due_actions(svc.notices.get(key), worked, TURN_LIMIT_S)
+    if "warn" in actions:
+        svc.notices.update(key, pinged=True, warned=True)
+        post_request(client, svc, rec, owner, worked)
+    elif "ping" in actions:
+        svc.notices.update(key, pinged=True)
+        client.chat_postMessage(
+            channel=svc.channel,
+            text=(
+                f"{mention(owner, rec.player)} your turn ({rec.leader_display}, turn {rec.turn}) has lasted "
+                f"{duration(worked)} of workday time. After {duration(TURN_LIMIT_S)} other players can "
+                "approve Claude playing it. DM me a note to have Claude play it now."
+            ),
+        )
+
+
+def notice_loop(client, svc: Services, lock: TurnLock) -> None:
+    while True:
+        time.sleep(NOTICE_POLL_S)
+        if lock.current is not None:
+            continue  # a run is on: the turn is being played
+        try:
+            notice_tick(client, svc)
+        except Exception:
+            log.exception("notice poll failed")
+
+
+def upload_shots(client, channel: str, thread_ts: str | None, paths: list[Path]) -> None:
+    """Upload pictures, then delete them. A failed upload is logged, not raised."""
+    for path in paths:
+        try:
+            client.files_upload_v2(channel=channel, file=str(path), title=path.stem, thread_ts=thread_ts)
+        except Exception as exc:
+            log.warning("could not upload %s: %s", path.name, exc)
+        finally:
+            path.unlink(missing_ok=True)
+
+
+def post_outcome(client, svc: Services, owner: Player | None, rec, after, session) -> None:
+    """After a run: tell the channel, @ the next player, and send the pictures where they belong.
+
+    Mid-turn pictures show the player's own map, so they go to that player
+    by DM only. The first and last picture go to the channel, but only when
+    the turn ended: then the last one shows the next player's turn-change
+    screen. If the turn did not end, every picture goes to the player.
+    """
+    name = owner.name if owner else rec.player
+    ended = after is not None and after.key != rec.key
+    shots = session
+    if ended:
+        nxt = player_named(after.player)
+        root = client.chat_postMessage(
+            channel=svc.channel,
+            text=(
+                f"Claude played {name}'s turn {rec.turn} ({rec.leader_display}). "
+                f"{mention(nxt, after.player)} you're up."
+            ),
+        )["ts"]
+        public = [p for p in (shots.pre, shots.post) if p] if shots else []
+        private = list(shots.mid) if shots else []
+    else:
+        client.chat_postMessage(
+            channel=svc.channel,
+            text=f"Claude did not finish {name}'s turn {rec.turn}. Someone at the PC should look at the game.",
+        )
+        root, public, private = None, [], (shots.all() if shots else [])
+    if not svc.uploads:
+        for path in public + private:
+            path.unlink(missing_ok=True)
+        return
+    upload_shots(client, svc.channel, root, public)
+    dm = open_dm(client, owner)
+    if dm:
+        upload_shots(client, dm, None, private)
+    else:
+        for path in private:
+            path.unlink(missing_ok=True)
+
+
+def run_turn(client, svc: Services, channel: str, thread_ts: str | None, prompt: str, claude: str,
+             owner: Player | None, rec) -> None:
+    """Play a turn with live progress, screenshots, and the channel announcement after it."""
+    session = screenshots.ShotSession() if svc.uploads else None
+    if session:
+        session.start()
+    try:
+        run_with_progress(client, channel, thread_ts, prompt, claude)
+    finally:
+        if session:
+            session.finish()
+    after = whose_turn()
+    post_outcome(client, svc, owner, rec, after[0] if after else None, session)
+
+
+def register(app: App, claude: str, lock: TurnLock, svc: Services | None = None) -> None:
+    svc = svc or Services()
     seen: deque[str] = deque(maxlen=200)
 
     @app.event("app_mention")
@@ -556,6 +734,39 @@ def register(app: App, claude: str, lock: TurnLock) -> None:
     @app.event("app_home_opened")
     def on_home_opened():
         pass
+
+    @app.action("civ_approve")
+    def on_approve(ack, body, client):
+        """Approve button on the takeover request: counts like a DM from that player."""
+        ack()
+        user = body["user"]["id"]
+        channel = body.get("channel", {}).get("id") or svc.channel
+
+        def reply(text: str):
+            return client.chat_postEphemeral(channel=channel, user=user, text=text)
+
+        sender = SLACK_PLAYERS.get(user)
+        if sender is None:
+            reply(REJECTION)
+            return
+        if not lock.try_acquire(user):
+            reply("Busy with a run. Click Approve again when it's done.")
+            return
+        try:
+            current = whose_turn()
+            if current is None:
+                reply("I can't tell whose turn it is: the game isn't loaded. Someone at the PC has to open it.")
+                return
+            rec, worked = current
+            if body["actions"][0].get("value") != key_of(rec):
+                reply("That turn is already over; the request is out of date.")
+                return
+            timed_out_turn(sender, player_named(rec.player), rec, worked, reply, client)
+        except Exception as exc:
+            log.exception("approval failed")
+            reply(f"The bot itself failed: `{exc}`")
+        finally:
+            lock.release()
 
     def handle(body, event, context, client, say, thread_ts: str | None, is_dm: bool) -> None:
         # Socket Mode can redeliver an event after a reconnect.
@@ -617,7 +828,7 @@ def register(app: App, claude: str, lock: TurnLock) -> None:
         prompt = OWN_TURN_PROMPT.format(
             name=sender.name, leader=rec.leader_display, turn=rec.turn, text=text, slack_format=SLACK_FORMAT
         )
-        run_with_progress(client, channel, thread_ts, prompt, claude)
+        run_turn(client, svc, channel, thread_ts, prompt, claude, sender, rec)
 
     def timed_out_turn(sender: Player, owner: Player | None, rec, worked: float, reply, client):
         """Another player: play the turn from a fixed prompt once its timer has run out."""
@@ -630,6 +841,19 @@ def register(app: App, claude: str, lock: TurnLock) -> None:
                 f"{duration(TURN_LIMIT_S - worked)}."
             )
             return
+        key = key_of(rec)
+        approvers = svc.notices.add_approval(key, sender.slack_id).approvers
+        if not turn_notices.approval_met(set(approvers), owner.slack_id if owner else None, svc.approvals_needed):
+            post_request(client, svc, rec, owner, worked)
+            reply(
+                f"{name}'s turn has lasted {duration(worked)} of workday time, past the "
+                f"{duration(TURN_LIMIT_S)} limit. Approval recorded ({len(approvers)}/{svc.approvals_needed}): "
+                f"it needs {svc.approvals_needed} players, or {name} alone. Use the Approve button in <#{svc.channel}>."
+            )
+            return
+        approved_by = ", ".join(SLACK_PLAYERS[u].name for u in approvers if u in SLACK_PLAYERS)
+        close_request(client, svc, rec, owner, f"approved by {approved_by}. Claude is playing it.")
+        svc.notices.clear_approvals(key)
         dm = open_dm(client, owner)
         reply(
             f"{name}'s turn ({rec.leader_display}, turn {rec.turn}) has lasted {duration(worked)} "
@@ -654,7 +878,7 @@ def register(app: App, claude: str, lock: TurnLock) -> None:
                     f"of workday time, so {sender.name} asked me to play it for you."
                 ),
             )
-            run_with_progress(client, dm, None, prompt, claude)
+            run_turn(client, svc, dm, None, prompt, claude, owner, rec)
         else:
             log.info("reply for %s (not on Slack):\n%s", name, run_claude(prompt, claude, log_step))
         current = whose_turn()
@@ -664,6 +888,25 @@ def register(app: App, claude: str, lock: TurnLock) -> None:
             reply(f"Done: {name}'s turn {rec.turn} is over. It's now {nxt.name if nxt else after.player}'s turn.")
         else:
             reply(f"{name}'s turn was not finished. Someone at the PC may need to look at the game.")
+
+
+def check_scopes(client) -> bool:
+    """Stop if a scope the bot needs is missing. Returns whether screenshots can be uploaded."""
+    try:
+        resp = client.auth_test()
+    except Exception as exc:
+        raise SystemExit(f"Slack rejected the bot token: {exc}")
+    header = next((v for k, v in dict(resp.headers or {}).items() if str(k).lower() == "x-oauth-scopes"), None)
+    if header is None:
+        log.warning("Slack did not report the token's scopes; not checking them")
+        return True
+    granted = slack_setup.parse_scopes(header)
+    fatal, warnings = slack_setup.scope_problems(granted)
+    for w in warnings:
+        log.warning(w)
+    if fatal:
+        raise SystemExit("; ".join(fatal) + ". Fix them under OAuth & Permissions and reinstall the app.")
+    return "files:write" in granted
 
 
 def main() -> None:
@@ -681,7 +924,13 @@ def main() -> None:
 
     lock = TurnLock()
     app = App(token=bot_token)
-    register(app, claude, lock)
+    svc = Services(
+        channel=env.get("CIV_CHANNEL_ID") or DEFAULT_CHANNEL,
+        approvals_needed=int(env.get("APPROVALS_NEEDED") or turn_notices.APPROVALS_NEEDED),
+    )
+    svc.uploads = check_scopes(app.client)
+    register(app, claude, lock, svc)
+    threading.Thread(target=notice_loop, args=(app.client, svc, lock), daemon=True).start()
     current = turn_logger.duration_of_current_turn()
     turn = f"{current[0].player}'s turn {current[0].turn} since {current[0].at:%a %d %b %H:%M}" if current else "unknown"
     log.info("%d players; turn log: %s; claude: %s; repo: %s", len(PLAYERS), turn, claude, REPO_ROOT)

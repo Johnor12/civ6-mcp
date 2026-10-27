@@ -118,10 +118,13 @@ checked against whose turn the game is on:
   Mentioning the bot in a channel on your own turn only gets "DM me", since
   the other players read the channel.
 - **Someone else's turn: DM or mention the bot with anything.** Once that
-  turn has lasted 2 hours of workday time (9:00–17:00, Mon–Fri), Claude plays
-  it from a fixed prompt: what you wrote never reaches Claude. The absent
-  player gets the progress and Claude's report by DM; you only hear whose
-  turn it is afterwards. Before the 2 hours are up you get the timer.
+  turn has lasted 2 hours of workday time (9:00–17:00, Mon–Fri), your
+  message counts as one approval for Claude to play it from a fixed prompt
+  (what you wrote never reaches Claude). It starts when 3 different players
+  have approved, or when the turn's owner approves alone. Other players
+  approve with the button on the request the bot posts in the channel.
+  The absent player gets the progress and Claude's report by DM. Before
+  the 2 hours are up you get the timer.
 
 ```bash
 cp .env.example .env      # bot token, app token
@@ -130,9 +133,12 @@ uv run scripts/start.py   # the turn logger and the bot, side by side
 
 The Slack app needs Socket Mode on, an app-level token with
 `connections:write`, the bot scopes `app_mentions:read`, `im:history`,
-`im:write` and `chat:write`, the bot events `app_mention` and `message.im`,
-the Messages tab enabled under App Home (for DMs), and an invite to the
-channel.
+`im:write`, `chat:write` and `files:write` (screenshots; without it they are
+skipped), the bot events `app_mention` and `message.im`, Interactivity (the
+Approve button), the Messages tab enabled under App Home (for DMs), and an
+invite to the channel. `scripts/slack_app_manifest.yml` has all of it: paste it
+under App Manifest to compare or apply. At start the bot checks the scopes
+and stops with a clear message if a needed one is missing.
 
 - **Turn timer.** `scripts/turn_logger.py` asks the game whose turn it is
   every 5 minutes (through `hotseat.whose_turn`; the MCP server itself
@@ -142,6 +148,19 @@ channel.
   game once more, so a turn ended a minute ago counts. A turn's clock
   starts at its first row; when the game is not loaded the bot goes by the
   last row.
+- **Pings and takeover requests.** `scripts/turn_notices.py` keeps the
+  state in `scripts/data/turn_notices.json`. A minute-by-minute check of the
+  turn log pings the player in the channel at 1 hour of workday time. At 2
+  hours it posts a takeover request with an Approve button (`CIV_CHANNEL_ID`
+  in `.env` picks the channel; `APPROVALS_NEEDED` the number of players).
+  Approvals count for that turn only.
+- **Results and screenshots.** When a run ends the bot posts in the channel:
+  who Claude played for and an @ to the next player. `scripts/screenshots.py`
+  takes a picture at the start, up to two during (every 2 minutes) and one at
+  the end. The start and end pictures go to the channel thread, and only when
+  the turn ended, because the end picture is then the next player's
+  turn-change screen. Mid-turn pictures show the player's own map, so they go
+  to that player by DM only; if the turn did not end, all of them do.
 - **Live progress.** The bot's first reply is edited every few seconds with
   the elapsed time, one line per game action ("Warrior: move → (37,40)",
   "Research: Pottery", the end-turn result), Claude's narration and failed

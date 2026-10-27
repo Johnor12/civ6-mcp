@@ -15,3 +15,7 @@ logs/
 
 # Secrets
 .env
+
+# Bot runtime state
+scripts/data/turn_notices.json
+scripts/data/shots/
