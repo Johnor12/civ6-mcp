@@ -55,7 +55,7 @@ if TYPE_CHECKING:
 log = logging.getLogger("turn_logger")
 
 TURN_LOG_PATH = REPO_ROOT / "scripts" / "data" / "turn_log.jsonl"
-POLL_S = 5 * 60
+POLL_S = 60
 MIDTURN_SAVE_TAG = f"{hotseat.SAVE_TAG} MIDTURN"  # a save taken after the player pressed Start Turn
 
 # Workday hours, local time, Monday to Friday.

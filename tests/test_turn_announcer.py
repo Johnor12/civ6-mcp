@@ -95,7 +95,7 @@ class TestTurnStart:
 
     def test_a_ping_by_another_player_counts(self, slack):
         # The finishing player pinged Randy before the logger saw the turn change.
-        slack.say(_at(0, 9, 57), f"<@{RANDY}|Randy Schwemmer>")
+        slack.say(_at(0, 9, 59), f"<@{RANDY}|Randy Schwemmer>")
         _turn(_at(0, 10))
         assert not _check(slack, _at(0, 10, 1))
         assert slack.posts == []

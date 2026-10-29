@@ -176,16 +176,16 @@ class TestSaveOfTurn:
     NAME = "GITARJA 6 3600 BC"
 
     def test_any_save_since_the_turn_can_have_begun(self, tmp_path):
-        # The first row can be a poll late, so from 10:00 on every save is this turn's, whatever its name.
-        before = _save_file(tmp_path, "AutoSave_0005", _at(0, 9, 59))
+        # The first row can be a poll late, so from 10:04 on every save is this turn's, whatever its name.
+        before = _save_file(tmp_path, "AutoSave_0005", _at(0, 10, 3))
         assert turn_logger.save_of_turn(self.FIRST, self.PREVIOUS, self.NAME, [before]) is None
-        since = _save_file(tmp_path, "my own name", _at(0, 10))
+        since = _save_file(tmp_path, "my own name", _at(0, 10, 4))
         assert turn_logger.save_of_turn(self.FIRST, self.PREVIOUS, self.NAME, [before, since]) == since
 
     def test_nothing_from_before_the_previous_row(self, tmp_path):
-        # Cameron was still on at 10:03, so a 10:02 save is his, within a poll of the first row or not.
-        previous = turn_logger.TurnRecord(_at(0, 10, 3), 6, "LEADER_JULIUS_CAESAR", "Cameron")
-        f = _save_file(tmp_path, "JULIUS CAESAR 6 3600 BC", _at(0, 10, 2))
+        # Cameron was still on at 10:04:30, so a 10:04 save is his, within a poll of the first row or not.
+        previous = turn_logger.TurnRecord(_at(0, 10, 4) + timedelta(seconds=30), 6, "LEADER_JULIUS_CAESAR", "Cameron")
+        f = _save_file(tmp_path, "JULIUS CAESAR 6 3600 BC", _at(0, 10, 4))
         assert turn_logger.save_of_turn(self.FIRST, previous, self.NAME, [f]) is None
 
     def test_by_name_however_late_the_turn_was_logged(self, tmp_path):
@@ -244,7 +244,7 @@ class TestPoll:
 
     def test_an_autosave_is_enough(self, tmp_path, monkeypatch):
         conn, saves, log = self._game(tmp_path, monkeypatch)
-        _save_file(saves / "auto", "AutoSave_0006", datetime.now() - timedelta(minutes=2))
+        _save_file(saves / "auto", "AutoSave_0006", datetime.now() - timedelta(seconds=30))
         self._poll(log, saves)
         assert conn.saves_sent() == []
 

@@ -141,7 +141,7 @@ Socket Mode needs no request URL), the Messages tab enabled under App Home
 (for DMs), and an invite to #proj-diplomatic-relations.
 
 - **Turn timer.** `scripts/turn_logger.py` asks the game whose turn it is
-  every 5 minutes (through `hotseat.whose_turn`; the MCP server itself
+  every minute (through `hotseat.whose_turn`; the MCP server itself
   records nothing) and appends a row to `scripts/data/turn_log.jsonl` when
   the turn or the player changed. The bot reads the log with
   `turn_logger.duration_of_current_turn()`, after having the logger ask the
@@ -154,13 +154,13 @@ Socket Mode needs no request URL), the Messages tab enabled under App Home
   `<LEADER> <turn> <year> MCP`, or `... MCP MIDTURN` once the player is
   playing. The bot and the announcer never save.
 - **Turn pings and reminders.** `scripts/turn_announcer.py` runs the same
-  check every 5 minutes and @'s the player whose turn it is in
+  check every minute and @'s the player whose turn it is in
   #proj-diplomatic-relations: "it's your turn" when the turn begins (unless
   someone already @'d them there since), a reminder after 1 hour of workday
   time, and after 2 hours a last one saying any other player can now have
   the turn played through the bot. The bot calls it right after each of its
   runs, so a turn the bot ended reaches the next player at once; a turn
-  ended at the PC is noticed within 5 minutes. The bot itself only answers
+  ended at the PC is noticed within a minute. The bot itself only answers
   messages.
 - **Live progress.** The bot's first reply is edited every few seconds with
   the elapsed time, one line per game action ("Warrior: move → (37,40)",

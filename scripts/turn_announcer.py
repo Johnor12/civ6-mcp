@@ -56,7 +56,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 log = logging.getLogger("turn_announcer")
 
 CHANNEL = "C09AZ6CR7QE"  # #proj-diplomatic-relations
-POLL_S = 5 * 60
+POLL_S = 60
 REMINDER_S = 3600  # workday time before the first reminder
 LOCK_PATH = REPO_ROOT / "scripts" / "data" / "turn_announcer.lock"
 
