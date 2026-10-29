@@ -130,7 +130,7 @@ only decides who may do what; what a message means is up to Claude.
 
 ```bash
 cp .env.example .env      # bot token, app token
-uv run scripts/start.py   # the turn logger, the turn announcer and the bot
+uv run scripts/start.py   # the turn logger, the announcer, the turn report and the bot
 ```
 
 The Slack app needs Socket Mode on, an app-level token with
@@ -162,6 +162,19 @@ Socket Mode needs no request URL), the Messages tab enabled under App Home
   runs, so a turn the bot ended reaches the next player at once; a turn
   ended at the PC is noticed within a minute. The bot itself only answers
   messages.
+- **Turn report.** `scripts/turn_report.py` posts in
+  #proj-diplomatic-relations at 9:00 every workday: how many turns were
+  taken the previous workday and every player's average that day, then
+  everyone's average since the log began, both in workday time (9:00–17:00
+  Mon–Fri) and slowest first. `--print` shows the message, `--now` posts
+  it at once. The figures come from `scripts/turn_times.py`, which
+  rebuilds every player-turn since the log began from the seat order,
+  fills in the players a 5-minute poll skipped with the saves in the
+  hotseat folder (`<LEADER> <turn> <year>` names the player and turn; the
+  autosave at the start of a game turn pins the first seat exactly), and
+  splits what remains evenly. Run it on its own for the table, `--turns`
+  for every turn and what its timing rests on. Nothing is saved; the log
+  is the history.
 - **Live progress.** The bot's first reply is edited every few seconds with
   the elapsed time, one line per game action ("Warrior: move → (37,40)",
   "Research: Pottery", the end-turn result), Claude's narration and failed

@@ -3,7 +3,7 @@
 # requires-python = ">=3.12"
 # dependencies = []
 # ///
-"""Start the turn logger, the turn announcer and the Slack bot side by side.
+"""Start the turn logger, the turn announcer, the turn report and the Slack bot side by side.
 
     uv run scripts/start.py
 
@@ -21,7 +21,7 @@ import time
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parent
-SERVICES = ("turn_logger.py", "turn_announcer.py", "slack_bot.py")
+SERVICES = ("turn_logger.py", "turn_announcer.py", "turn_report.py", "slack_bot.py")
 
 
 def main() -> None:
