@@ -147,7 +147,12 @@ Socket Mode needs no request URL), the Messages tab enabled under App Home
   `turn_logger.duration_of_current_turn()`, after having the logger ask the
   game once more, so a turn ended a minute ago counts. A turn's clock
   starts at its first row; when the game is not loaded the bot goes by the
-  last row.
+  last row. The logger also stands in for the Save Game button: when the
+  hotseat save folder has no save of the current turn (none newer than the
+  turn's start, autosaves included, and none named after its turn-change
+  screen, `<LEADER> <turn> <year>`), it saves the game as
+  `<LEADER> <turn> <year> MCP`, or `... MCP MIDTURN` once the player is
+  playing. The bot and the announcer never save.
 - **Turn pings and reminders.** `scripts/turn_announcer.py` runs the same
   check every 5 minutes and @'s the player whose turn it is in
   #proj-diplomatic-relations: "it's your turn" when the turn begins (unless

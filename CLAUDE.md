@@ -16,7 +16,9 @@ query what you need before deciding.
    Every game tool is locked until step 2. If the game is at the main menu,
    `list_saves` then `load_hotseat_save(name)` opens the save and ends on the
    turn-change screen. Load a save made during the absent player's turn
-   (the game's autosave at turn change, or a save from that screen).
+   (the game's autosave at turn change, or a save from that screen). Saves
+   tagged `MCP` were written by the tooling on that screen; `MCP MIDTURN`
+   means that player had already started playing when it was taken.
 2. `begin_standin_turn(leader, note)` — takes that player's seat (presses
    Start Turn for them) and arms stand-in mode. It refuses if the screen
    shows someone else: never play a different player than the one named.

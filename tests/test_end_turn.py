@@ -87,7 +87,7 @@ def test_ends_turn_waits_for_next_player_and_saves():
     conn.on("HS|", status)
     _quiet_turn(conn)
     conn.on("ACTION_ENDTURN", ["SENT|2"])
-    conn.on("NAME|", ["NAME|FREDERICK BARBAROSSA 63 150 AD MCP"])
+    conn.on("NAME|", ["NAME|FREDERICK BARBAROSSA 63 150 AD"])
     conn.on("Network.SaveGame", ["SAVED|3"])
     res = _run(end_turn.execute_hotseat_end_turn(GameState(conn), "LEADER_POUNDMAKER"))
     assert res.ended and res.ended_turn == 63
@@ -105,7 +105,7 @@ def test_save_failure_still_counts_as_ended():
     conn.on("HS|", lambda: [_hs(leader="LEADER_BARBAROSSA", slot=3, controls=True)] if any("ACTION_ENDTURN" in c for c in conn.sent) else [_hs()])
     _quiet_turn(conn)
     conn.on("ACTION_ENDTURN", ["SENT|2"])
-    conn.on("NAME|", ["NAME|X 63 Y MCP"])
+    conn.on("NAME|", ["NAME|X 63 Y"])
     conn.on("Network.SaveGame", ["nope"])
     res = _run(end_turn.execute_hotseat_end_turn(GameState(conn), "LEADER_POUNDMAKER"))
     assert res.ended and res.save_name == ""

@@ -16,6 +16,7 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 from civ_mcp.bridge import (
     CONTEXT_FRONTEND,
@@ -41,19 +42,23 @@ def normalize_leader(leader: str) -> str:
     return s
 
 
+def hotseat_save_files(base: Path | None = None) -> list[tuple[Path, str]]:
+    """Every save in the game's hotseat folder and its auto/ and quick/ subfolders, with a listing tag."""
+    base = base or hotseat_saves_dir()
+    found: list[tuple[Path, str]] = []
+    for sub, tag in (("", ""), ("auto", " [autosave]"), ("quick", " [quicksave]")):
+        folder = base / sub if sub else base
+        if folder.is_dir():
+            found.extend((f, tag) for f in folder.glob("*.Civ6Save"))
+    return found
+
+
 def list_hotseat_saves(limit: int = 30) -> str:
     """Saves in the game's hotseat folder (plus its auto/ and quick/ subfolders), newest first."""
     base = hotseat_saves_dir()
-    found: list[tuple[float, str]] = []
-    for sub, tag in (("", ""), ("auto", " [autosave]"), ("quick", " [quicksave]")):
-        folder = base / sub if sub else base
-        if not folder.is_dir():
-            continue
-        for f in folder.glob("*.Civ6Save"):
-            found.append((f.stat().st_mtime, f.stem + tag))
+    found = sorted(((f.stat().st_mtime, f.stem + tag) for f, tag in hotseat_save_files(base)), reverse=True)
     if not found:
         return f"No hotseat saves found in {base}."
-    found.sort(reverse=True)
     lines = [f"Hotseat saves in {base} (newest first; load with load_hotseat_save):"]
     lines.extend(f"  {name}" for _, name in found[:limit])
     return "\n".join(lines)
@@ -192,19 +197,31 @@ async def status(conn: BridgeConnection) -> HotseatStatus:
     return HotseatStatus(screen="none")
 
 
+async def open_connection() -> BridgeConnection | None:
+    """A bridge connection of one's own, or None when the game is not up. Never raises.
+
+    For scripts outside the MCP server (scripts/turn_logger.py): None while
+    Civ 6 is closed, still loading, or without the bridge mod.
+    """
+    conn = BridgeConnection()
+    try:
+        await conn.connect()
+    except Exception as e:  # noqa: BLE001 — game not running, bridge mod missing
+        log.debug("no game: %s", e)
+        return None
+    return conn
+
+
 async def whose_turn(conn: BridgeConnection | None = None) -> HotseatStatus | None:
     """The status of the hotseat player whose turn it is, or None when no turn is up.
 
     None while Civ 6 is closed, at the main menu, loading, or between two
-    players. Without a connection it opens its own, so a script outside the
-    MCP server (scripts/turn_logger.py) can ask. Never raises.
+    players. Without a connection it opens its own (open_connection).
+    Never raises.
     """
     if conn is None:
-        conn = BridgeConnection()
-        try:
-            await conn.connect()
-        except Exception as e:  # noqa: BLE001 — game not running, bridge mod missing
-            log.debug("whose_turn: no game: %s", e)
+        conn = await open_connection()
+        if conn is None:
             return None
     st = await status(conn)
     if st.screen != "ingame" or not st.is_hotseat or not (st.turn_active or st.turn_controls_visible):
@@ -517,20 +534,37 @@ _SAVE_NAME_LUA = (
     "local leader = Locale.ToUpper(Locale.Lookup(pc:GetLeaderName())) "
     "local turn = Game.GetCurrentGameTurn() "
     "local year = Calendar.MakeYearStr(turn) "
-    "local name = leader .. ' ' .. turn .. ' ' .. year .. ' MCP' "
+    "local name = leader .. ' ' .. turn .. ' ' .. year "
     "name = string.gsub(name, '[\\\\/:*?\"<>|]', '') "
     'print("NAME|" .. name) '
     f'print("{SENTINEL}")'
 )
 
 
-async def suggest_save_name(conn: BridgeConnection) -> str:
-    """'<NEXT PLAYER'S LEADER> <turn> <year> MCP', the players' own convention plus a tag."""
+SAVE_TAG = "MCP"  # ends the name of every save this tooling writes, after the game's own name
+
+
+async def default_save_name(conn: BridgeConnection) -> str:
+    """'<LEADER> <turn> <year>' for the local player: the name the game offers on its Save Game screen.
+
+    Players keep that name as a rule, so it also says which saves are of
+    which turn-change screen. Empty when the game does not answer.
+    """
     lines = await conn.execute_in_context(CONTEXT_INGAME, _SAVE_NAME_LUA, 6.0)
     for line in lines:
         if line.startswith("NAME|"):
             return line.split("|", 1)[1].strip()
-    return f"HOTSEAT MCP {int(time.time())}"
+    return ""
+
+
+def tagged_save_name(default_name: str, tag: str = SAVE_TAG) -> str:
+    """The game's default name plus a tag, or a timestamp when the game gave no name."""
+    return f"{default_name} {tag}" if default_name else f"HOTSEAT {tag} {int(time.time())}"
+
+
+async def suggest_save_name(conn: BridgeConnection) -> str:
+    """'<NEXT PLAYER'S LEADER> <turn> <year> MCP', the players' own convention plus a tag."""
+    return tagged_save_name(await default_save_name(conn))
 
 
 def _save_lua(name: str) -> str:

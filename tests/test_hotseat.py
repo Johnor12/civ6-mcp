@@ -223,9 +223,11 @@ class TestEndTurn:
 
     def test_save_name_and_save(self):
         conn = _FakeBridge()
-        conn.replies.append(("NAME|", ["NAME|BARBAROSSA 63 150 AD MCP"]))
+        conn.replies.append(("NAME|", ["NAME|BARBAROSSA 63 150 AD"]))
         conn.replies.append(("SAVED|", ["SAVED|3"]))
+        assert _run(hotseat.default_save_name(conn)) == "BARBAROSSA 63 150 AD"
         assert _run(hotseat.suggest_save_name(conn)) == "BARBAROSSA 63 150 AD MCP"
+        assert hotseat.tagged_save_name("", "MCP").startswith("HOTSEAT MCP ")
         assert _run(hotseat.save_hotseat(conn, "X 1 Y MCP")) == "X 1 Y MCP"
         code = conn.sent[-1][1]
         assert 'gf.Name = "X 1 Y MCP"' in code
