@@ -140,9 +140,11 @@ uv run scripts/start.py   # the turn logger, the announcer, the turn report and 
 The Slack app needs Socket Mode on, an app-level token with
 `connections:write`, the bot scopes `app_mentions:read`, `im:history`,
 `im:write`, `chat:write` and `channels:history`, the bot events
-`app_mention` and `message.im`, Interactivity turned on (for the button;
-Socket Mode needs no request URL), the Messages tab enabled under App Home
-(for DMs), and an invite to #proj-diplomatic-relations.
+`app_mention`, `message.im` and `app_home_opened`, Interactivity turned on
+(for the buttons; Socket Mode needs no request URL), the Messages and Home
+tabs enabled under App Home (DMs, and a status page with whose turn it is
+and what the viewer can do about it), and an invite to
+#proj-diplomatic-relations.
 
 - **Turn timer.** `scripts/turn_logger.py` asks the game whose turn it is
   every minute (through `hotseat.whose_turn`; the MCP server itself
@@ -160,17 +162,19 @@ Socket Mode needs no request URL), the Messages tab enabled under App Home
 - **Turn pings and reminders.** `scripts/turn_announcer.py` runs the same
   check every minute and @'s the player whose turn it is in
   #proj-diplomatic-relations: "it's your turn" when the turn begins (unless
-  someone already @'d them there since), a reminder after 1 hour of workday
-  time, and after 2 hours a last one saying any other player can now have
-  the turn played through the bot. The bot calls it right after each of its
+  someone already @'d them there since), with every turn finished since
+  the bot's last post in the channel and how long each took in workday
+  time; a reminder after 1 hour of workday time; and after 2 hours a last
+  one saying any other player can now have the turn played through the
+  bot. The bot calls it right after each of its
   runs, so a turn the bot ended reaches the next player at once; a turn
   ended at the PC is noticed within a minute. The bot itself only answers
   messages.
 - **Turn report.** `scripts/turn_report.py` posts in
   #proj-diplomatic-relations at 9:00 every workday: how many turns were
-  taken the previous workday and every player's average that day, then
-  everyone's average since the log began, both in workday time (9:00–17:00
-  Mon–Fri) and slowest first. `--print` shows the message, `--now` posts
+  taken the previous workday, the average turn and every player's average
+  that day, then the same since the log began, all in workday time
+  (9:00–17:00 Mon–Fri) and slowest first. `--print` shows the message, `--now` posts
   it at once. The figures come from `scripts/turn_times.py`, which
   rebuilds every player-turn since the log began from the seat order,
   fills in the players a poll skipped (every 5 minutes until 29 Oct 2026,

@@ -24,8 +24,10 @@ between their neighbours, which averages the time over the turns taken.
 
 Times are minutes of workday time (turn_logger.WORKDAY, what the bot's turn
 limit counts), so a turn held overnight costs nothing. scripts/turn_report.py
-posts player_averages() in the game channel every workday morning. Standard
-library only; turn_logger and civ_mcp come from the repo.
+posts player_averages() in the game channel every workday morning, and
+scripts/turn_announcer.py lists the turns finished since its last post when
+it pings the next player. Standard library only; turn_logger and civ_mcp
+come from the repo.
 """
 
 from __future__ import annotations
@@ -314,9 +316,19 @@ def ended_on(seq: list[PlayerTurn], day: date) -> list[tuple[PlayerTurn, datetim
     return [(pt, end) for pt, end in finished(seq) if end.date() == day]
 
 
+def ended_after(seq: list[PlayerTurn], when: datetime) -> list[tuple[PlayerTurn, datetime]]:
+    """The finished player-turns that ended after `when`."""
+    return [(pt, end) for pt, end in finished(seq) if end > when]
+
+
 def minutes(pt: PlayerTurn, end: datetime) -> float:
     """A finished turn's minutes of workday time."""
     return turn_logger.workday_seconds(pt.start, end) / 60
+
+
+def mean_minutes(done: list[tuple[PlayerTurn, datetime]]) -> float:
+    """The average turn among `done` (see finished, ended_on), in minutes of workday time."""
+    return statistics.mean(minutes(pt, end) for pt, end in done)
 
 
 def player_averages(done: list[tuple[PlayerTurn, datetime]]) -> list[PlayerAverage]:
@@ -372,8 +384,8 @@ def report(seq: list[PlayerTurn], skipped: list[str], turns: bool = False) -> st
             f"{a.player:<14}{a.turns:>6}{a.guessed:>8}{hm(a.mean_minutes):>9}{hm(a.median_minutes):>8}"
             f"{hm(a.max_minutes):>9}"
         )
-    mins = [minutes(pt, end) for pt, end in done]
-    lines.append(f"{'ALL':<14}{len(done):>6}{'':>8}{hm(statistics.mean(mins)):>9}{hm(statistics.median(mins)):>8}")
+    median = statistics.median(minutes(pt, end) for pt, end in done)
+    lines.append(f"{'ALL':<14}{len(done):>6}{'':>8}{hm(mean_minutes(done)):>9}{hm(median):>8}")
     first, last = seq[0].start, seq[-1].start
     lines.append(
         f"\nMinutes of workday time ({turn_logger.WORKDAY}). "

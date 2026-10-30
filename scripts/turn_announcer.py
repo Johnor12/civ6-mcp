@@ -16,7 +16,11 @@ message fell due:
 
 - When the turn begins: "it's your turn", unless someone has @'d the player
   in the channel since. Players ping the next one by hand when they finish,
-  so a mention by anyone counts.
+  so a mention by anyone counts. The message ends with every turn finished
+  since the bot last posted in the channel and how long each took, in
+  workday time, from scripts/turn_times.py (the daily report's figures), so
+  the turns that got a hand ping are accounted for too. Without a post of
+  its own in the last LOOKBACK_S, the turns of that stretch are listed.
 - After REMINDER_S of workday time: a reminder from the bot.
 - After turn_logger.TURN_LIMIT_S: a last message from the bot, saying any
   other player can now have the turn played through the Slack bot.
@@ -48,6 +52,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import turn_logger  # scripts/turn_logger.py, next to this script
+import turn_times  # scripts/turn_times.py, next to this script
 from players import player_named
 from turn_logger import TURN_LIMIT_S, WORKDAY, duration
 
@@ -58,11 +63,14 @@ log = logging.getLogger("turn_announcer")
 CHANNEL = "C09AZ6CR7QE"  # #proj-diplomatic-relations
 POLL_S = 60
 REMINDER_S = 3600  # workday time before the first reminder
+LOOKBACK_S = 24 * 3600  # how far back the turn message looks for the bot's last post
 LOCK_PATH = REPO_ROOT / "scripts" / "data" / "turn_announcer.lock"
+SAVES_DIR: Path | None = None  # hotseat save folder for turn_times; None is the game's
 
 # (workday seconds into the turn, message); the last one due is sent.
+# {recent} is the finished turns since the bot's last post (see recent_turns).
 STAGES = (
-    (0, "{mention} it's your turn: {leader}, turn {turn}. Play it at the PC, or DM me your note and I'll play it for you."),
+    (0, "{mention} it's your turn (turn {turn}).{recent}"),
     (
         REMINDER_S,
         (
@@ -128,6 +136,7 @@ def _announce(client, now: datetime) -> bool:
                 mention=f"<@{player.slack_id}>",
                 leader=rec.leader_display,
                 turn=rec.turn,
+                recent=recent_turns(client, now) if stage == 0 else "",
                 waited=duration(REMINDER_S),
                 limit=duration(TURN_LIMIT_S),
                 workday=WORKDAY,
@@ -154,6 +163,46 @@ def mentioned(client, slack_id: str, since: datetime, from_bot: bool) -> bool:
         cursor = (page.get("response_metadata") or {}).get("next_cursor")
         if not cursor:
             return False
+
+
+def recent_turns(client, now: datetime) -> str:
+    """' Since my last post: Heldi 30m, Randy 10m.' for the turns finished since the bot last posted; '' for none.
+
+    The turns and their minutes of workday time come from turn_times, the
+    daily report's figures, so the two agree. The bot's last post is looked
+    for LOOKBACK_S back; without one, the turns of that stretch are listed.
+    Never raises: a failure is logged and the message goes out without the
+    list.
+    """
+    try:
+        floor = now - timedelta(seconds=LOOKBACK_S)
+        since = last_own_post(client, floor) or floor
+        seq, _ = turn_times.compute(saves_dir=SAVES_DIR)
+        done = turn_times.ended_after(seq, since)
+    except Exception:
+        log.exception("could not work out the turns since the last post")
+        return ""
+    if not done:
+        return ""
+    return " Since my last post: " + ", ".join(
+        f"{pt.player} {turn_times.hm(turn_times.minutes(pt, end))}" for pt, end in done
+    ) + "."
+
+
+def last_own_post(client, floor: datetime) -> datetime | None:
+    """When the bot last posted in the channel, or None if not since `floor`."""
+    bot_ids = own_ids(client)
+    cursor = None
+    while True:
+        page = client.conversations_history(
+            channel=CHANNEL, oldest=f"{floor.timestamp():.6f}", inclusive=True, limit=200, cursor=cursor
+        )
+        for msg in page["messages"]:  # newest first
+            if msg.get("user") in bot_ids or msg.get("bot_id") in bot_ids:
+                return datetime.fromtimestamp(float(msg["ts"]))
+        cursor = (page.get("response_metadata") or {}).get("next_cursor")
+        if not cursor:
+            return None
 
 
 def own_ids(client) -> tuple[str, str]:

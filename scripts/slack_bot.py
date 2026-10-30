@@ -30,6 +30,10 @@ decides who may do what; what a message means is left to Claude.
   any other player's turn without waiting for the timer. A click is checked
   the same way: before the limit only the admin's counts, so a button the
   admin got in a channel thread plays nothing for anyone else.
+- The app's Home tab is a status page: whose turn it is, its timer and what
+  the viewer may do about it. It is published each time the tab is opened
+  and when its Refresh button is pressed; the button to play a turn stays
+  in DMs.
 
 How long a turn has lasted comes from the turn log that scripts/turn_logger.py
 keeps (scripts/start.py runs both). Before reading it the bot has the logger
@@ -62,6 +66,7 @@ import time
 from collections import deque
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 import turn_announcer  # scripts/turn_announcer.py, next to this script
@@ -162,6 +167,7 @@ ADMIN_NOTE = "Played at the game admin's request, without a note from the player
 # The button under a timed-out turn's status; its value is the turn's key, so
 # a click after that turn ended plays nothing.
 PLAY_ACTION = "play_timed_out_turn"
+HOME_REFRESH_ACTION = "refresh_home"
 NO_GAME = (
     "I can't tell whose turn it is: the game isn't loaded and the turn log "
     "is empty. Someone at the PC has to open the hotseat game."
@@ -489,6 +495,65 @@ def turn_status(rec: turn_logger.TurnRecord, worked: float, whose: str) -> str:
     )
 
 
+def home_view(
+    viewer: Player | None,
+    current: tuple[turn_logger.TurnRecord, float] | None,
+    run: Run | None,
+    now: datetime | None = None,
+) -> dict:
+    """The App Home tab: whose turn it is, its timer, and what the viewer can do about it.
+
+    The same answers a message would get, without the button: a Home tab
+    click has no conversation to reply in, so the button stays in DMs.
+    """
+    if viewer is None:
+        lines = [REJECTION]
+    elif current is None:
+        lines = [NO_GAME]
+    else:
+        rec, worked = current
+        owner = player_named(rec.player)
+        name = owner.name if owner else rec.player
+        limit = duration(TURN_LIMIT_S)
+        if owner == viewer:
+            lines = [
+                turn_status(rec, worked, "your"),
+                "DM me what you want done with it: a note to play the turn by, or a question "
+                "about your game. Not in a channel: the other players can read it.",
+            ]
+        elif worked >= TURN_LIMIT_S:
+            lines = [
+                turn_status(rec, worked, f"{name}'s"),
+                f"That's past the {limit} limit: DM me for a button to have me play it for {name}.",
+            ]
+        elif viewer.admin:
+            lines = [
+                turn_status(rec, worked, f"{name}'s"),
+                f"The {limit} limit is {duration(TURN_LIMIT_S - worked)} away, but as the admin "
+                f"you can DM me for a button to have me play it for {name} now.",
+            ]
+        else:
+            lines = [
+                turn_status(rec, worked, f"{name}'s"),
+                f"Another player can have it played after {limit} of workday time ({WORKDAY}), "
+                f"so in {duration(TURN_LIMIT_S - worked)}. DM me then for the button.",
+            ]
+    if run is not None:
+        lines.append(f"Busy with the run <@{run.user}> started {minutes(time.monotonic() - run.started)} ago.")
+    refresh = {
+        "type": "button",
+        "action_id": HOME_REFRESH_ACTION,
+        "text": {"type": "plain_text", "text": "Refresh"},
+    }
+    blocks = [
+        {"type": "header", "text": {"type": "plain_text", "text": "Civ 6 hotseat"}},
+        *({"type": "section", "text": {"type": "mrkdwn", "text": line}} for line in lines),
+        {"type": "actions", "elements": [refresh]},
+        {"type": "context", "elements": [{"type": "mrkdwn", "text": f"As of {(now or datetime.now()):%a %d %b %H:%M}."}]},
+    ]
+    return {"type": "home", "blocks": blocks}
+
+
 def whose_turn() -> tuple[turn_logger.TurnRecord, float] | None:
     """The current turn and its workday seconds so far, from the turn log after one fresh poll."""
     try:
@@ -544,8 +609,24 @@ def register(app: App, claude: str, lock: TurnLock) -> None:
         handle(body, event, context, client, say, thread_ts=event.get("thread_ts"), is_dm=True)
 
     @app.event("app_home_opened")
-    def on_home_opened():
-        pass
+    def on_home_opened(event, client):
+        # Fires for the Messages tab too; that one needs nothing.
+        if event.get("tab", "home") == "home":
+            publish_home(client, event["user"])
+
+    @app.action(HOME_REFRESH_ACTION)
+    def on_home_refresh(ack, body, client):
+        ack()
+        publish_home(client, body["user"]["id"])
+
+    def publish_home(client, user: str) -> None:
+        """Put whose turn it is, and what the viewer may do about it, on their Home tab."""
+        viewer = SLACK_PLAYERS.get(user)
+        current = whose_turn() if viewer else None
+        try:
+            client.views_publish(user_id=user, view=home_view(viewer, current, lock.current))
+        except Exception as exc:
+            log.warning("home view for %s failed: %s", user, exc)
 
     def handle(body, event, context, client, say, thread_ts: str | None, is_dm: bool) -> None:
         # Socket Mode can redeliver an event after a reconnect.

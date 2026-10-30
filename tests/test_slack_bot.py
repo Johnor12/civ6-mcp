@@ -78,6 +78,7 @@ class FakeClient:
     def __init__(self) -> None:
         self.posts: list[tuple[str, str]] = []
         self.updates: list[dict] = []
+        self.homes: list[tuple[str, dict]] = []  # (user, view) of each views.publish
 
     def conversations_open(self, users):
         return {"channel": {"id": f"D{users}"}}
@@ -89,6 +90,9 @@ class FakeClient:
     def chat_update(self, **kwargs):
         self.updates.append(kwargs)
 
+    def views_publish(self, user_id, view):
+        self.homes.append((user_id, view))
+
 
 class Bot:
     """Drives the registered handlers as Slack would."""
@@ -99,6 +103,7 @@ class Bot:
         self.replies: list[tuple[str, dict]] = []
         self.runs: list[tuple[str | None, str]] = []  # (conversation, prompt) of each Claude run
         self.turns: list[tuple[TurnRecord, float]] = []
+        self.asked = 0  # whose_turn calls
         self.n = 0
         monkeypatch.setattr(slack_bot, "whose_turn", self._whose_turn)
         monkeypatch.setattr(
@@ -117,6 +122,7 @@ class Bot:
         self.turns = list(turns)
 
     def _whose_turn(self):
+        self.asked += 1
         if not self.turns:
             return None
         return self.turns.pop(0) if len(self.turns) > 1 else self.turns[0]
@@ -141,6 +147,19 @@ class Bot:
     def click(self, user: str, value: str, channel: str = "C1") -> None:
         body = {"user": {"id": user}, "message": {"ts": "9.0", "text": "status"}, "channel": {"id": channel}}
         self.app.actions[slack_bot.PLAY_ACTION](lambda: None, body, {"value": value}, self.client, self._say)
+
+    def open_home(self, user: str, tab: str = "home") -> None:
+        self.app.events["app_home_opened"]({"user": user, "tab": tab}, self.client)
+
+    def refresh_home(self, user: str) -> None:
+        self.app.actions[slack_bot.HOME_REFRESH_ACTION](lambda: None, {"user": {"id": user}}, self.client)
+
+    @property
+    def home(self) -> str:
+        """The text of the last Home view published, one line per section."""
+        user, view = self.client.homes[-1]
+        assert view["type"] == "home"
+        return "\n".join(b["text"]["text"] for b in view["blocks"] if b["type"] == "section")
 
     @property
     def last(self) -> str:
@@ -266,3 +285,59 @@ def test_owner_click_is_sent_to_dm(bot):
     bot.click(AIDAN, key(rec))
     assert bot.last == "It's your turn: DM me what you want done with it."
     assert not bot.runs
+
+
+def test_home_tab_tells_the_owner_to_dm(bot):
+    bot.on((turn("Aidan"), HALF_HOUR))
+    bot.open_home(AIDAN)
+    assert bot.client.homes[-1][0] == AIDAN
+    assert "It's your turn (Nzinga Mbande, turn 10)" in bot.home and "DM me what you want done" in bot.home
+    assert not bot.runs and not bot.replies
+
+
+def test_home_tab_gives_a_rival_the_timer(bot):
+    bot.on((turn("Aidan"), HALF_HOUR))
+    bot.open_home(HELDI)
+    assert "It's Aidan's turn" in bot.home and "so in 1h 30m. DM me then for the button" in bot.home
+
+
+def test_home_tab_after_the_limit_points_a_rival_to_the_button(bot):
+    bot.on((turn("Aidan"), TURN_LIMIT_S))
+    bot.open_home(HELDI)
+    assert "past the 2h limit: DM me for a button" in bot.home
+
+
+def test_home_tab_tells_the_admin_about_the_button(bot):
+    bot.on((turn("Aidan"), HALF_HOUR))
+    bot.open_home(JOHN)
+    assert "as the admin you can DM me for a button" in bot.home
+
+
+def test_home_tab_without_a_game(bot):
+    bot.open_home(HELDI)
+    assert bot.home == slack_bot.NO_GAME
+
+
+def test_home_tab_refuses_a_stranger_without_asking_the_game(bot):
+    bot.on((turn("Aidan"), HALF_HOUR))
+    bot.open_home("U000STRANGER")
+    assert bot.home == slack_bot.REJECTION
+    assert not bot.asked  # whose_turn was not called
+
+
+def test_messages_tab_publishes_nothing(bot):
+    bot.on((turn("Aidan"), HALF_HOUR))
+    bot.open_home(HELDI, tab="messages")
+    assert not bot.client.homes
+
+
+def test_home_refresh_republishes(bot):
+    bot.on((turn("Aidan"), HALF_HOUR))
+    bot.refresh_home(HELDI)
+    assert len(bot.client.homes) == 1 and "It's Aidan's turn" in bot.home
+
+
+def test_home_tab_shows_a_run_in_progress():
+    view = slack_bot.home_view(SLACK_PLAYERS[HELDI], (turn("Aidan"), HALF_HOUR), slack_bot.Run(JOHN, 0.0))
+    text = "\n".join(b["text"]["text"] for b in view["blocks"] if b["type"] == "section")
+    assert "It's Aidan's turn" in text and f"Busy with the run <@{JOHN}> started" in text

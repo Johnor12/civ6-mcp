@@ -15,9 +15,10 @@
 The figures come from scripts/turn_times.py: the turn log plus the hotseat
 saves, each turn's minutes of workday time (turn_logger.WORKDAY, what the
 bot's turn limit counts). The post ranks players slowest first twice: over
-the previous workday's turns (how many were taken, and each player's
-average that day) and over every turn since the log began. Nothing is
-written anywhere; the turn log is the history. A workday on which the
+the previous workday's turns (how many were taken, the average turn, and
+each player's average that day) and over every turn since the log began
+(again with the turn count and the average turn). Nothing is written
+anywhere; the turn log is the history. A workday on which the
 process is not up at POST_AT gets no report. scripts/start.py runs this
 next to the turn logger, the announcer and the bot. The bot token comes
 from the repo's .env and the bot must be a member of the channel.
@@ -57,10 +58,17 @@ def _ranking(averages: list[turn_times.PlayerAverage]) -> list[str]:
     return [f"{rank}. {a.player}: {turn_times.hm(a.mean_minutes)}" for rank, a in enumerate(averages, 1)]
 
 
-def message(seq: list[turn_times.PlayerTurn], today: date | None = None) -> str:
-    """The post: the previous workday's turns and everyone's averages, then the averages since the log began.
+def _count(done: list[tuple[turn_times.PlayerTurn, datetime]]) -> str:
+    """'3 turns, 23m average'; '0 turns' when there are none."""
+    turns = f"{len(done)} turn" + ("s" if len(done) != 1 else "")
+    return f"{turns}, {turn_times.hm(turn_times.mean_minutes(done))} average" if done else turns
 
-    Empty while no turn has finished.
+
+def message(seq: list[turn_times.PlayerTurn], today: date | None = None) -> str:
+    """The post: the previous workday's turns and everyone's averages, then the same since the log began.
+
+    Each heading gives the turn count and the average turn. Empty while no
+    turn has finished.
     """
     done = turn_times.finished(seq)
     if not done:
@@ -69,9 +77,8 @@ def message(seq: list[turn_times.PlayerTurn], today: date | None = None) -> str:
     day = previous_workday(today)
     label = f"Yesterday ({day:%a %d %b})" if day == today - timedelta(days=1) else f"{day:%A %d %b}"
     yesterday = turn_times.ended_on(seq, day)
-    turns = f"{len(yesterday)} turn" + ("s" if len(yesterday) != 1 else "")
 
-    lines = [f"*Turn times* in workday hours ({WORKDAY}), slowest first.", "", f"*{label}: {turns}*"]
+    lines = [f"*Turn times* in workday hours ({WORKDAY}), slowest first.", "", f"*{label}: {_count(yesterday)}*"]
     if yesterday:
         lines += _ranking(turn_times.player_averages(yesterday))
         played = {pt.player for pt, _ in yesterday}
@@ -79,7 +86,7 @@ def message(seq: list[turn_times.PlayerTurn], today: date | None = None) -> str:
         idle = sorted((p for p in seats if p not in played), key=seats.get)
         if idle:
             lines.append("No turn: " + ", ".join(idle))
-    lines += ["", f"*Since {seq[0].start:%a %d %b}*", *_ranking(turn_times.player_averages(done))]
+    lines += ["", f"*Since {seq[0].start:%a %d %b}: {_count(done)}*", *_ranking(turn_times.player_averages(done))]
     return "\n".join(lines)
 
 

@@ -247,13 +247,13 @@ def test_report_message_has_yesterday_then_everything(game):
     assert text.splitlines() == [
         f"*Turn times* in workday hours ({turn_logger.WORKDAY}), slowest first.",
         "",
-        "*Yesterday (Wed 28 Oct): 3 turns*",
+        "*Yesterday (Wed 28 Oct): 3 turns, 23m average*",
         "1. Cy: 30m",
         "2. Bob: 20m",
         "3. Di: 20m",
         "No turn: Ann",
         "",
-        "*Since Tue 27 Oct*",
+        "*Since Tue 27 Oct: 4 turns, 20m average*",
         "1. Cy: 30m",
         "2. Bob: 20m",
         "3. Di: 20m",
@@ -266,7 +266,7 @@ def test_monday_report_covers_friday(game):
     seq, _ = game.compute()
     lines = turn_report.message(seq, today=date(2026, 11, 2)).splitlines()  # a Monday
     assert lines[2] == "*Friday 30 Oct: 0 turns*"
-    assert lines[3:5] == ["", "*Since Tue 27 Oct*"]
+    assert lines[3:5] == ["", "*Since Tue 27 Oct: 4 turns, 20m average*"]
 
 
 def test_previous_workday():

@@ -15,6 +15,9 @@ import turn_logger  # noqa: E402
 MONDAY = datetime(2026, 10, 26)
 RANDY = "U0B7FQ1GJ7N"
 HELDI = "U0B1J1T47QC"
+HUNTER = "U07G75S7JBS"
+JOHN = "U035CAQE34H"
+AARON = "U0AN2M2PENR"
 BOT_USER, BOT_ID = "U0CC4C1D4BV", "B0CD50C6MDW"
 
 
@@ -70,6 +73,7 @@ def slack(tmp_path, monkeypatch) -> FakeSlack:
     monkeypatch.setattr(turn_logger, "TURN_LOG_PATH", tmp_path / "turn_log.jsonl")
     monkeypatch.setattr(turn_logger, "log_current_turn", lambda path=None: True)  # no game
     monkeypatch.setattr(turn_announcer, "LOCK_PATH", tmp_path / "turn_announcer.lock")
+    monkeypatch.setattr(turn_announcer, "SAVES_DIR", tmp_path / "saves")  # no saves
     monkeypatch.setattr(turn_announcer, "_sent", set())
     monkeypatch.setattr(turn_announcer, "_bot_ids", None)
     return FakeSlack()
@@ -88,7 +92,7 @@ class TestTurnStart:
     def test_new_turn_pings_the_player_once(self, slack):
         _turn(_at(0, 10))
         assert _check(slack, _at(0, 10, 1))
-        assert slack.posts == [f"<@{RANDY}> it's your turn: Genghis Khan, turn 3. Play it at the PC, or DM me your note and I'll play it for you."]
+        assert slack.posts == [f"<@{RANDY}> it's your turn (turn 3)."]  # the log begins here: no finished turn to list
         calls = slack.history_calls
         assert not _check(slack, _at(0, 10, 6))
         assert slack.history_calls == calls  # remembered, the channel is not read again
@@ -114,16 +118,60 @@ class TestTurnStart:
         assert slack.history_calls == 3
 
     def test_next_player_is_pinged_when_the_turn_changes(self, slack):
-        _turn(_at(0, 10))
+        _turn(_at(0, 10), player="Heldi", leader="LEADER_GITARJA")
         assert _check(slack, _at(0, 10, 1))
-        _turn(_at(0, 10, 30), player="Heldi", leader="LEADER_GITARJA")
+        _turn(_at(0, 10, 30))  # Randy, the next seat
         assert _check(slack, _at(0, 10, 30))
-        assert slack.posts[-1].startswith(f"<@{HELDI}> it's your turn: Gitarja, turn 3.")
+        # Heldi's turn: half a poll before her row to half a poll before Randy's.
+        assert slack.posts[-1] == f"<@{RANDY}> it's your turn (turn 3). Since my last post: Heldi 30m."
 
     def test_a_player_not_in_players_is_skipped(self, slack):
         _turn(_at(0, 10), player="Player 1")
         assert not _check(slack, _at(0, 10, 1))
         assert slack.posts == []
+
+
+class TestRecentTurns:
+    """The turn message lists the turns finished since the bot last posted, hand-pinged ones included."""
+
+    def test_turns_since_the_last_post_are_listed_with_their_times(self, slack):
+        _turn(_at(0, 10), player="Heldi", leader="LEADER_GITARJA")
+        assert _check(slack, _at(0, 10, 1))  # the bot's post
+        _turn(_at(0, 10, 30))  # Randy
+        slack.say(_at(0, 10, 30), f"<@{RANDY}>")  # pinged by hand: the bot stays quiet
+        assert not _check(slack, _at(0, 10, 31))
+        _turn(_at(0, 10, 40), player="Hunter", leader="LEADER_AMANITORE")
+        slack.say(_at(0, 10, 40), f"<@{HUNTER}> go", user=RANDY)
+        assert not _check(slack, _at(0, 10, 41))
+        _turn(_at(0, 10, 50), player="John", leader="LEADER_LIME_THULE_DAVE")
+        assert _check(slack, _at(0, 10, 51))
+        assert slack.posts[-1] == (
+            f"<@{JOHN}> it's your turn (turn 3). Since my last post: Heldi 30m, Randy 10m, Hunter 10m."
+        )
+        # The next post starts over from this one.
+        _turn(_at(0, 11), player="Aaron", leader="LEADER_CLEOPATRA", turn=4)
+        assert _check(slack, _at(0, 11, 1))
+        assert slack.posts[-1] == f"<@{AARON}> it's your turn (turn 4). Since my last post: John 10m."
+
+    def test_without_a_post_of_its_own_the_bot_lists_the_last_day(self, slack):
+        _turn(_at(0, 9), player="Cameron", leader="LEADER_JULIUS_CAESAR")
+        _turn(_at(0, 10), player="Heldi", leader="LEADER_GITARJA")  # Cameron's turn ended on Monday
+        _turn(_at(1, 10, 30))  # Randy: Heldi held the turn overnight
+        _turn(_at(1, 10, 40), player="Hunter", leader="LEADER_AMANITORE")
+        for at, who in ((_at(0, 10), HELDI), (_at(1, 10, 30), RANDY), (_at(1, 10, 40), HUNTER)):
+            slack.say(at, f"<@{who}>")
+        _turn(_at(1, 10, 50), player="John", leader="LEADER_LIME_THULE_DAVE")
+        assert _check(slack, _at(1, 10, 51))
+        assert slack.posts == [
+            f"<@{JOHN}> it's your turn (turn 3). Since my last post: Heldi 8h 30m, Randy 10m, Hunter 10m."
+        ]
+
+    def test_a_seat_turn_times_does_not_know_does_not_stop_the_ping(self, slack, caplog):
+        _turn(_at(0, 10), player="Heldi", leader="LEADER_NOBODY")
+        _turn(_at(0, 10, 30))
+        assert _check(slack, _at(0, 10, 31))
+        assert slack.posts == [f"<@{RANDY}> it's your turn (turn 3)."]
+        assert "turns since the last post" in caplog.text
 
 
 class TestReminders:
