@@ -1,4 +1,4 @@
-"""The hotseat game's players: who may use the Slack bot, and whom the turn announcer pings.
+"""The hotseat game's players: who may use the Slack bot, which of them is the admin, and whom the turn announcer pings.
 
 Imported by scripts/slack_bot.py and scripts/turn_announcer.py; standard
 library only.
@@ -13,6 +13,7 @@ from dataclasses import dataclass
 class Player:
     name: str  # hotseat player name in the game
     slack_id: str
+    admin: bool = False  # may have any other player's turn played before its timer runs out
 
 
 # Everyone in the game. They play under their first names, except Jake
@@ -28,7 +29,7 @@ PLAYERS = (
     Player("Heldi", "U0B1J1T47QC"),  # Heldi Valikaj
     Player("Randy", "U0B7FQ1GJ7N"),  # Randy Schwemmer
     Player("Hunter", "U07G75S7JBS"),  # Hunter Boyd
-    Player("John", "U035CAQE34H"),  # John McGue
+    Player("John", "U035CAQE34H", admin=True),  # John McGue, runs the game
 )
 SLACK_PLAYERS = {p.slack_id: p for p in PLAYERS}
 

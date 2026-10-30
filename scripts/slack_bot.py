@@ -26,6 +26,10 @@ decides who may do what; what a message means is left to Claude.
   from a fixed prompt (nothing the player wrote reaches Claude). The absent
   player gets the progress and Claude's reply by DM; the player who clicked
   only hears whose turn it is now.
+- The admin (Player.admin in scripts/players.py: John) gets that button on
+  any other player's turn without waiting for the timer. A click is checked
+  the same way: before the limit only the admin's counts, so a button the
+  admin got in a channel thread plays nothing for anyone else.
 
 How long a turn has lasted comes from the turn log that scripts/turn_logger.py
 keeps (scripts/start.py runs both). Before reading it the bot has the logger
@@ -125,10 +129,8 @@ Message from {name}:
 {text}
 """
 
-TIMED_OUT_PROMPT = """\
-This run was started from Slack because a turn timer ran out: it has been \
-{name}'s turn ({leader}, turn {turn}) for {worked} of workday time, past the \
-{limit} limit, and another player asked for it to be played. {name} left no \
+ABSENT_PROMPT = """\
+This run was started from Slack {reason}. {name} left no \
 note. Nobody is at the terminal and nobody can answer questions before the run \
 ends, so decide for yourself and put your reasoning in the diary.
 
@@ -143,7 +145,19 @@ stop and say what someone at the PC has to do.
 Your final message is sent to {name} in Slack as-is, telling them what \
 happened to their turn. {slack_format}
 """
+# The first sentence of ABSENT_PROMPT and the begin_standin_turn note: for a
+# turn whose timer ran out, and for one the admin had played before that.
+TIMED_OUT_REASON = (
+    "because a turn timer ran out: it has been {name}'s turn ({leader}, turn "
+    "{turn}) for {worked} of workday time, past the {limit} limit, and another "
+    "player asked for it to be played"
+)
+ADMIN_REASON = (
+    "by {admin}, the game's admin, who asked for {name}'s turn ({leader}, turn "
+    "{turn}) to be played after {worked} of workday time, before the {limit} limit"
+)
 TIMED_OUT_NOTE = "Turn timer ran out; played without a note from the player."
+ADMIN_NOTE = "Played at the game admin's request, without a note from the player."
 
 # The button under a timed-out turn's status; its value is the turn's key, so
 # a click after that turn ended plays nothing.
@@ -565,7 +579,7 @@ def register(app: App, claude: str, lock: TurnLock) -> None:
             if owner == sender:
                 own_turn(sender, rec, worked, text, is_dm, reply, client, event["channel"], thread_ts)
             else:
-                other_turn(owner, rec, worked, reply)
+                other_turn(sender, owner, rec, worked, reply)
 
         locked(user, reply, work)
 
@@ -599,6 +613,15 @@ def register(app: App, claude: str, lock: TurnLock) -> None:
             if owner == sender:
                 reply("It's your turn: DM me what you want done with it.")
                 return
+            if worked < TURN_LIMIT_S and not sender.admin:
+                # The admin's button in a channel thread is visible to everyone.
+                name = owner.name if owner else rec.player
+                status = turn_status(rec, worked, f"{name}'s")
+                reply(
+                    f"{status} Only the admin can have it played before the "
+                    f"{duration(TURN_LIMIT_S)} limit; you can in {duration(TURN_LIMIT_S - worked)}."
+                )
+                return
             # Take the button away so nobody clicks it again.
             client.chat_update(
                 channel=body["channel"]["id"],
@@ -606,7 +629,7 @@ def register(app: App, claude: str, lock: TurnLock) -> None:
                 text=f"{message.get('text', '')}\n_{sender.name} asked me to play it._",
                 blocks=[],
             )
-            play_timed_out_turn(sender, owner, rec, worked, reply, client)
+            play_absent_turn(sender, owner, rec, worked, reply, client)
 
         locked(user, reply, work)
 
@@ -643,18 +666,27 @@ def register(app: App, claude: str, lock: TurnLock) -> None:
         run_with_progress(client, channel, thread_ts, prompt, claude)
         turn_announcer.announce(client)
 
-    def other_turn(owner: Player | None, rec, worked: float, reply) -> None:
-        """Another player: the turn's timer, and once it has run out a button to have the turn played."""
+    def other_turn(sender: Player, owner: Player | None, rec, worked: float, reply) -> None:
+        """Another player: the turn's timer, and once it has run out a button to have the turn played.
+
+        The admin gets the button before the timer runs out as well.
+        """
         name = owner.name if owner else rec.player
         status = turn_status(rec, worked, f"{name}'s")
-        if worked < TURN_LIMIT_S:
+        if worked >= TURN_LIMIT_S:
+            text = f"{status} That's past the {duration(TURN_LIMIT_S)} limit, so you can have me play it for {name}."
+        elif sender.admin:
+            text = (
+                f"{status} The {duration(TURN_LIMIT_S)} limit is {duration(TURN_LIMIT_S - worked)} away, "
+                f"but as the admin you can have me play it for {name} now."
+            )
+        else:
             reply(
                 f"{status} Another player can have it "
                 f"played after {duration(TURN_LIMIT_S)} of workday time ({WORKDAY}), so in "
                 f"{duration(TURN_LIMIT_S - worked)}."
             )
             return
-        text = f"{status} That's past the {duration(TURN_LIMIT_S)} limit, so you can have me play it for {name}."
         button = {
             "type": "button",
             "action_id": PLAY_ACTION,
@@ -673,33 +705,42 @@ def register(app: App, claude: str, lock: TurnLock) -> None:
         blocks = [{"type": "section", "text": {"type": "mrkdwn", "text": text}}, {"type": "actions", "elements": [button]}]
         reply(text, blocks=blocks)
 
-    def play_timed_out_turn(sender: Player, owner: Player | None, rec, worked: float, reply, client):
-        """Play a turn whose timer ran out from a fixed prompt, for the player who clicked the button."""
+    def play_absent_turn(sender: Player, owner: Player | None, rec, worked: float, reply, client):
+        """Play a turn from a fixed prompt for whoever clicked the button: its timer ran out, or the admin asked before that."""
         name = owner.name if owner else rec.player
+        timed_out = worked >= TURN_LIMIT_S
         dm = open_dm(client, owner)
-        reply(
-            f"{name}'s turn ({rec.leader_display}, turn {rec.turn}) has lasted {duration(worked)} "
-            f"of workday time, past the {duration(TURN_LIMIT_S)} limit. Playing it for them now"
-            + (f"; {name} gets the details." if dm else ".")
+        lasted = f"{name}'s turn ({rec.leader_display}, turn {rec.turn}) has lasted {duration(worked)} of workday time"
+        details = f"; {name} gets the details." if dm else "."
+        if timed_out:
+            reply(f"{lasted}, past the {duration(TURN_LIMIT_S)} limit. Playing it for them now{details}")
+        else:
+            reply(f"{lasted}, under the {duration(TURN_LIMIT_S)} limit. Playing it for them now as you, the admin, asked{details}")
+        log.info(
+            "%s turn for %s, %s turn %d, asked by %s",
+            "timed-out" if timed_out else "admin-requested", name, rec.leader, rec.turn, sender.name,
         )
-        log.info("timed-out turn for %s, %s turn %d, asked by %s", name, rec.leader, rec.turn, sender.name)
-        prompt = TIMED_OUT_PROMPT.format(
+        fields = dict(
             name=name,
             leader=rec.leader_display,
             turn=rec.turn,
             worked=duration(worked),
             limit=duration(TURN_LIMIT_S),
-            note=TIMED_OUT_NOTE,
+            admin=sender.name,
+        )
+        prompt = ABSENT_PROMPT.format(
+            reason=(TIMED_OUT_REASON if timed_out else ADMIN_REASON).format(**fields),
+            note=TIMED_OUT_NOTE if timed_out else ADMIN_NOTE,
             slack_format=SLACK_FORMAT,
+            **fields,
         )
         if dm:
-            client.chat_postMessage(
-                channel=dm,
-                text=(
-                    f"Your turn ({rec.leader_display}, turn {rec.turn}) has lasted {duration(worked)} "
-                    f"of workday time, so {sender.name} asked me to play it for you."
-                ),
-            )
+            yours = f"Your turn ({rec.leader_display}, turn {rec.turn}) has lasted {duration(worked)} of workday time"
+            if timed_out:
+                text = f"{yours}, so {sender.name} asked me to play it for you."
+            else:
+                text = f"{yours}; {sender.name}, the game's admin, asked me to play it for you."
+            client.chat_postMessage(channel=dm, text=text)
             run_with_progress(client, dm, None, prompt, claude)
         else:
             log.info("reply for %s (not on Slack):\n%s", name, run_claude(prompt, claude, log_step))

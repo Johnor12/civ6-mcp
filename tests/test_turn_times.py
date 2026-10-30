@@ -52,15 +52,41 @@ def game(tmp_path):
         def autosave(self, when: datetime, n: int = 1) -> None:
             self._file(self.saves / "auto", f"AutoSave_{n:04d}", when)
 
-        def compute(self):
+        def compute(self, poll_at=lambda when: POLL):
             self.saves.mkdir(exist_ok=True)
-            return turn_times.compute(self.log_path, self.saves, POLL)
+            return turn_times.compute(self.log_path, self.saves, poll_at)
 
     return Game()
 
 
 def starts(seq) -> dict[tuple[int, str], datetime]:
     return {(pt.turn, pt.player): pt.start for pt in seq}
+
+
+def test_poll_interval_follows_the_logger_history():
+    assert turn_times.poll_s_at(datetime(2026, 10, 27, 10)) == 300
+    assert turn_times.poll_s_at(datetime(2026, 10, 29, 16, 20, 59)) == 300
+    assert turn_times.poll_s_at(datetime(2026, 10, 29, 16, 21)) == 60
+    assert turn_times.poll_s_at(datetime(2027, 1, 1)) == turn_logger.POLL_S
+    assert turn_times.POLL_CHANGES[-1][1] == turn_logger.POLL_S  # keep POLL_CHANGES current
+
+
+def test_each_row_gets_the_window_of_its_day(game):
+    game.row(datetime(2026, 10, 29, 16, 10), 9, "LEADER_A")  # still 5-minute polls
+    game.row(datetime(2026, 10, 29, 16, 50), 9, "LEADER_B")  # 1-minute polls by then
+    seq, _ = game.compute(turn_times.poll_s_at)
+    ann, bob = seq
+    assert (ann.earliest, ann.latest, ann.start) == (
+        datetime(2026, 10, 29, 16, 5), datetime(2026, 10, 29, 16, 10), datetime(2026, 10, 29, 16, 7, 30))
+    assert (bob.earliest, bob.latest, bob.start) == (
+        datetime(2026, 10, 29, 16, 49), datetime(2026, 10, 29, 16, 50), datetime(2026, 10, 29, 16, 49, 30))
+
+
+def test_a_changed_logger_interval_is_flagged(game, monkeypatch, caplog):
+    game.row(at(10), 1, "LEADER_A")
+    monkeypatch.setattr(turn_logger, "POLL_S", 120)
+    game.compute()
+    assert "POLL_CHANGES ends at 60 s" in caplog.text
 
 
 def test_a_row_places_the_start_half_a_poll_before_it(game):

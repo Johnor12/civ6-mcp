@@ -10,7 +10,8 @@
 
 The turn log (scripts/turn_logger.py) has a row for the first poll that saw
 each player's turn-change screen, so a row says that turn had begun by then
-and no more than one poll earlier. A poll can miss a player who finished
+and no more than one poll earlier (the interval in force at the time: see
+POLL_CHANGES). A poll can miss a player who finished
 within the interval, so the sequence of player-turns is rebuilt from the
 seat order (SEATS) and the saves in the hotseat folder fill in what the log
 missed: a save named "<LEADER> <turn> <year>..." (the game's default name,
@@ -34,6 +35,7 @@ import logging
 import re
 import statistics
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -46,7 +48,15 @@ from civ_mcp.hotseat import hotseat_save_files  # noqa: E402
 
 log = logging.getLogger("turn_times")
 
-POLL_S = 300  # the logger's interval while the rows so far were written (5 min until 29 Oct 2026)
+# How often the turn logger has polled, by the moment each interval took
+# effect; the first entry is the interval the log began with. The last entry
+# must be turn_logger.POLL_S: when the logger's interval changes, add the
+# moment it was restarted with the new one here, or every later row gets the
+# wrong window and the error compounds.
+POLL_CHANGES: tuple[tuple[datetime, int], ...] = (
+    (datetime.min, 300),
+    (datetime(2026, 10, 29, 16, 21), 60),  # commit 9158f04, "shorten polling interval to 1 minute"
+)
 
 # The game's seats in turn order: the leader type the turn log records and
 # the leader name the game puts first in its default save name for that
@@ -71,6 +81,11 @@ SAVE_NAME = re.compile(r"^(?P<leader>.+?) (?P<turn>\d+) \d+ (?:BC|AD)(?: .*)?$")
 
 def leader_display(leader: str) -> str:
     return leader.replace("LEADER_", "").replace("_", " ").title()
+
+
+def poll_s_at(when: datetime) -> int:
+    """The logger's polling interval, in seconds, when a row was written at `when`."""
+    return next(seconds for since, seconds in reversed(POLL_CHANGES) if since <= when)
 
 
 @dataclass
@@ -156,11 +171,14 @@ def _rows_after(seq: list[PlayerTurn], k: int) -> datetime | None:
     return min(times) if times else None
 
 
-def attach_saves(seq: list[PlayerTurn], saves_dir: Path | None, poll_s: int = POLL_S) -> list[str]:
+def attach_saves(
+    seq: list[PlayerTurn], saves_dir: Path | None, poll_at: Callable[[datetime], int] = poll_s_at
+) -> list[str]:
     """Give each player-turn the saves written during it. Returns the saves that fit nowhere."""
     index = {(pt.turn, pt.leader): k for k, pt in enumerate(seq)}
     leader_of = {name.casefold(): leader for leader, name in SEATS}
-    begun = min(seq[0].rows) - timedelta(seconds=poll_s)
+    first_row = min(seq[0].rows)
+    begun = first_row - timedelta(seconds=poll_at(first_row))
     skipped: list[str] = []
     autosaves: list[tuple[datetime, str]] = []
     for f, tag in hotseat_save_files(saves_dir):
@@ -210,9 +228,12 @@ def _autosave_turn(seq: list[PlayerTurn], at: datetime) -> int | None:
     return None
 
 
-def estimate_starts(seq: list[PlayerTurn], poll_s: int = POLL_S) -> None:
-    """Place every player-turn's start: exactly, in the middle of its window, or spaced between neighbours."""
-    poll = timedelta(seconds=poll_s)
+def estimate_starts(seq: list[PlayerTurn], poll_at: Callable[[datetime], int] = poll_s_at) -> None:
+    """Place every player-turn's start: exactly, in the middle of its window, or spaced between neighbours.
+
+    `poll_at` gives the logger's interval when a row was written: the turn
+    had begun no more than that long before its first row.
+    """
     last_known: datetime | None = None  # the latest moment an earlier turn was known to be under way
     for pt in seq:
         evidence = pt.evidence
@@ -221,10 +242,11 @@ def estimate_starts(seq: list[PlayerTurn], poll_s: int = POLL_S) -> None:
             pt.basis = "autosave"
         elif evidence:
             hi = min(evidence)
-            lo = hi - poll if last_known is None else last_known
+            bounds = [last_known] if last_known is not None else []
             if pt.rows:
-                lo = max(lo, min(pt.rows) - poll)
-            lo = min(lo, hi)
+                first_row = min(pt.rows)
+                bounds.append(first_row - timedelta(seconds=poll_at(first_row)))
+            lo = min(max(bounds), hi) if bounds else hi
             pt.earliest, pt.latest = lo, hi
             pt.start = lo + (hi - lo) / 2
             pt.basis = "+".join(name for name, ok in (("row", pt.rows), ("save", pt.saves)) if ok)
@@ -258,19 +280,27 @@ def estimate_starts(seq: list[PlayerTurn], poll_s: int = POLL_S) -> None:
 
 
 def compute(
-    log_path: Path | None = None, saves_dir: Path | None = None, poll_s: int = POLL_S
+    log_path: Path | None = None,
+    saves_dir: Path | None = None,
+    poll_at: Callable[[datetime], int] = poll_s_at,
 ) -> tuple[list[PlayerTurn], list[str]]:
     """The player-turns the log covers, with their starts placed, and the saves that fit nowhere.
 
     The last player-turn is the one in progress; it has a start but no end.
     Both lists are empty while the log is. ValueError for a leader not in SEATS.
     """
+    if POLL_CHANGES[-1][1] != turn_logger.POLL_S:
+        log.warning(
+            "the turn logger polls every %d s but POLL_CHANGES ends at %d s: rows since the change "
+            "get the wrong window until the moment it took effect is added",
+            turn_logger.POLL_S, POLL_CHANGES[-1][1],
+        )
     records = turn_logger.read_records(log_path)
     if not records:
         return [], []
     seq = player_turns(records)
-    skipped = attach_saves(seq, saves_dir, poll_s)
-    estimate_starts(seq, poll_s)
+    skipped = attach_saves(seq, saves_dir, poll_at)
+    estimate_starts(seq, poll_at)
     return seq, skipped
 
 
@@ -362,16 +392,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--log", type=Path, default=turn_logger.TURN_LOG_PATH, help="the turn log (jsonl)")
     parser.add_argument("--saves", type=Path, default=None, help=f"hotseat save folder (default: {hotseat_saves_dir()})")
-    parser.add_argument(
-        "--poll-minutes", type=float, default=POLL_S / 60,
-        help="how often the logger polled while the rows were written (default: %(default)s)",
-    )
     parser.add_argument("--turns", action="store_true", help="also list every turn and what its timing rests on")
     args = parser.parse_args()
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
     try:
-        seq, skipped = compute(args.log, args.saves, int(args.poll_minutes * 60))
+        seq, skipped = compute(args.log, args.saves)
     except ValueError as e:
         raise SystemExit(str(e)) from None
     print(report(seq, skipped, turns=args.turns))

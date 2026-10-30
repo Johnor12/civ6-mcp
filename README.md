@@ -127,6 +127,10 @@ only decides who may do what; what a message means is up to Claude.
   progress and Claude's report by DM; you only hear whose turn it is
   afterwards. A button left over from a turn that has since ended does
   nothing.
+- **Admin.** The player marked `admin=True` in `PLAYERS` (John) gets that
+  button on anyone else's turn without waiting for the 2 hours, and is the
+  only one whose click counts before then. Claude is told the admin asked
+  for the turn; the admin's message still never reaches it.
 
 ```bash
 cp .env.example .env      # bot token, app token
@@ -169,7 +173,9 @@ Socket Mode needs no request URL), the Messages tab enabled under App Home
   Mon–Fri) and slowest first. `--print` shows the message, `--now` posts
   it at once. The figures come from `scripts/turn_times.py`, which
   rebuilds every player-turn since the log began from the seat order,
-  fills in the players a 5-minute poll skipped with the saves in the
+  fills in the players a poll skipped (every 5 minutes until 29 Oct 2026,
+  every minute since; `POLL_CHANGES` there must be kept in step with the
+  logger's interval) with the saves in the
   hotseat folder (`<LEADER> <turn> <year>` names the player and turn; the
   autosave at the start of a game turn pins the first seat exactly), and
   splits what remains evenly. Run it on its own for the table, `--turns`
