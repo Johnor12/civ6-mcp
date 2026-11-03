@@ -13,8 +13,10 @@ dist/
 *.log
 logs/
 
-# The turn announcer's lock file
+# Lock files, who holds the Claude run lock, and the out-of-office state
 scripts/data/*.lock
+scripts/data/*.json
+scripts/data/*.tmp
 
 # Secrets
 .env

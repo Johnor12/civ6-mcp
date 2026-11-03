@@ -198,22 +198,32 @@ def _build_set_ingame(
     blocking: str,
     ok_prefix: str,
 ) -> str:
-    """Shared builder for set_research / set_civic via InGame UI."""
+    """Shared builder for set_research / set_civic via InGame UI.
+
+    Always switches: the request replaces whatever is in progress (its
+    progress is kept by the game) instead of queueing behind it. This is
+    what the game's ResearchChooser.lua / CivicsChooser.lua send on a click:
+    the item's Hash with PARAM_INSERT_MODE = VALUE_EXCLUSIVE. Without the
+    insert mode the game appends the item, so a switch away from an
+    in-progress tech silently does nothing.
+    """
     err_label = "TECH" if "Tech" in gi_table else "CIVIC"
     has_method = "HasTech" if "Tech" in gi_table else "HasCivic"
     player_method = "GetTechs" if "Tech" in gi_table else "GetCulture"
     return f"""
 local id = Game.GetLocalPlayer()
 local idx = nil
+local hash = nil
 for row in GameInfo.{gi_table}() do
-    if row.{type_field} == "{name}" then idx = row.Index; break end
+    if row.{type_field} == "{name}" then idx = row.Index; hash = row.Hash; break end
 end
 if idx == nil then {_bail(f"ERR:{err_label}_NOT_FOUND|{name}")} end
 if Players[id]:{player_method}():{has_method}(idx) then
     {_bail(f"ERR:ALREADY_COMPLETED|{name} is already researched")}
 end
 local params = {{}}
-params[PlayerOperations.{param}] = idx
+params[PlayerOperations.{param}] = hash
+params[PlayerOperations.PARAM_INSERT_MODE] = PlayerOperations.VALUE_EXCLUSIVE
 UI.RequestPlayerOperation(id, PlayerOperations.{operation}, params)
 local list = NotificationManager.GetList(id)
 if list then

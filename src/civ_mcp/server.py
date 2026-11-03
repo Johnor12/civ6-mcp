@@ -1415,6 +1415,10 @@ async def purchase_item(
 async def set_research(ctx: Context, tech_or_civic: str, category: str = "tech") -> str:
     """Choose a technology or civic to research (see get_tech_civics).
 
+    Switches immediately, replacing the one in progress; there is no queue.
+    Progress on the replaced item is kept, so you can switch away from a
+    boosted tech or civic and come back to it later.
+
     Args:
         tech_or_civic: The type name, e.g. TECH_POTTERY or CIVIC_CRAFTSMANSHIP
         category: "tech" or "civic" (default: tech)

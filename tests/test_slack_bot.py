@@ -1,4 +1,4 @@
-"""The Slack bot's permissions: who gets the timer, who gets the button, and whose click plays a turn.
+"""The Slack bot's permissions: who gets the timer, who gets which button, and whose click does what.
 
 slack_bolt and python-dotenv belong to the script's own uv environment, so
 they are stubbed when the project venv lacks them. The handlers are driven
@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 import types
 from datetime import datetime
 from pathlib import Path
@@ -33,9 +34,12 @@ _stub("slack_bolt.adapter")
 _stub("slack_bolt.adapter.socket_mode", SocketModeHandler=object)
 _stub("dotenv", dotenv_values=lambda path: {})
 
+import claude_runs  # noqa: E402
+import out_of_office  # noqa: E402
 import slack_bot  # noqa: E402
 import turn_announcer  # noqa: E402
 from players import PLAYERS, SLACK_PLAYERS  # noqa: E402
+from claude_runs import RunLock  # noqa: E402
 from turn_logger import TURN_LIMIT_S, TurnRecord  # noqa: E402
 
 BOT = "U0CC4C1D4BV"
@@ -85,7 +89,7 @@ class FakeClient:
 
     def chat_postMessage(self, channel, text, thread_ts=None, **kwargs):
         self.posts.append((channel, text))
-        return {"channel": channel, "ts": "1.0"}
+        return {"channel": channel, "ts": f"{len(self.posts)}.0"}
 
     def chat_update(self, **kwargs):
         self.updates.append(kwargs)
@@ -97,7 +101,7 @@ class FakeClient:
 class Bot:
     """Drives the registered handlers as Slack would."""
 
-    def __init__(self, monkeypatch) -> None:
+    def __init__(self, monkeypatch, tmp_path) -> None:
         self.app = FakeApp()
         self.client = FakeClient()
         self.replies: list[tuple[str, dict]] = []
@@ -107,15 +111,17 @@ class Bot:
         self.n = 0
         monkeypatch.setattr(slack_bot, "whose_turn", self._whose_turn)
         monkeypatch.setattr(
-            slack_bot,
+            claude_runs,
             "run_with_progress",
             lambda client, channel, thread_ts, prompt, claude: self.runs.append((channel, prompt)),
         )
         monkeypatch.setattr(
-            slack_bot, "run_claude", lambda prompt, claude, report: self.runs.append((None, prompt)) or ""
+            claude_runs, "run_claude", lambda prompt, claude, report: self.runs.append((None, prompt)) or ""
         )
         monkeypatch.setattr(turn_announcer, "announce", lambda client: None)
-        slack_bot.register(self.app, "claude", slack_bot.TurnLock())
+        monkeypatch.setattr(out_of_office, "STATE_PATH", tmp_path / "out_of_office.json")
+        self.lock_path = tmp_path / "claude_run.lock"
+        slack_bot.register(self.app, "claude", RunLock(self.lock_path))
 
     def on(self, *turns: tuple[TurnRecord, float]) -> None:
         """What whose_turn answers, in order; the last answer repeats."""
@@ -144,9 +150,10 @@ class Bot:
         body, event, context = self._event(user, f"<@{BOT}> {text}", "C1")
         self.app.events["app_mention"](body, event, context, self.client, self._say)
 
-    def click(self, user: str, value: str, channel: str = "C1") -> None:
-        body = {"user": {"id": user}, "message": {"ts": "9.0", "text": "status"}, "channel": {"id": channel}}
-        self.app.actions[slack_bot.PLAY_ACTION](lambda: None, body, {"value": value}, self.client, self._say)
+    def click(self, user: str, value: str, channel: str = "C1", action: str = slack_bot.PLAY_ACTION, blocks=None) -> None:
+        message = {"ts": "9.0", "text": "status", "blocks": blocks or []}
+        body = {"user": {"id": user}, "message": message, "channel": {"id": channel}}
+        self.app.actions[action](lambda: None, body, {"value": value}, self.client, self._say)
 
     def open_home(self, user: str, tab: str = "home") -> None:
         self.app.events["app_home_opened"]({"user": user, "tab": tab}, self.client)
@@ -167,16 +174,28 @@ class Bot:
 
     @property
     def button(self) -> dict | None:
+        return self.find(slack_bot.PLAY_ACTION)
+
+    @property
+    def away_button(self) -> dict | None:
+        return self.find(out_of_office.VOTE_ACTION)
+
+    def find(self, action_id: str) -> dict | None:
         for block in self.replies[-1][1].get("blocks") or []:
             for element in block.get("elements", []):
-                if element.get("action_id") == slack_bot.PLAY_ACTION:
+                if element.get("action_id") == action_id:
                     return element
         return None
 
+    @property
+    def votes(self) -> list[str]:
+        """What the bot posted in the game channel."""
+        return [text for channel, text in self.client.posts if channel == out_of_office.CHANNEL]
+
 
 @pytest.fixture
-def bot(monkeypatch) -> Bot:
-    return Bot(monkeypatch)
+def bot(monkeypatch, tmp_path) -> Bot:
+    return Bot(monkeypatch, tmp_path)
 
 
 def test_only_john_is_admin():
@@ -338,6 +357,111 @@ def test_home_refresh_republishes(bot):
 
 
 def test_home_tab_shows_a_run_in_progress():
-    view = slack_bot.home_view(SLACK_PLAYERS[HELDI], (turn("Aidan"), HALF_HOUR), slack_bot.Run(JOHN, 0.0))
+    run = slack_bot.Run(f"a run for <@{JOHN}>", time.time() - 300)
+    view = slack_bot.home_view(SLACK_PLAYERS[HELDI], (turn("Aidan"), HALF_HOUR), run)
     text = "\n".join(b["text"]["text"] for b in view["blocks"] if b["type"] == "section")
-    assert "It's Aidan's turn" in text and f"Busy with the run <@{JOHN}> started" in text
+    assert "It's Aidan's turn" in text and f"Busy with a run for <@{JOHN}> (started 5 min ago)." in text
+
+
+# Out of office: the vote button, the vote it opens, and the "I'm back" button.
+
+
+def away_today(player: str) -> None:
+    with out_of_office.state() as s:
+        s["away"][player] = {"day": datetime.now().date().isoformat(), "vote": "5.0"}
+
+
+def test_rival_gets_the_out_of_office_button_before_the_limit(bot):
+    rec = turn("Aidan")
+    bot.on((rec, HALF_HOUR))
+    bot.dm(HELDI, "whose turn is it")
+    assert bot.button is None  # no Play button before the limit
+    assert bot.away_button and bot.away_button["value"] == key(rec)
+    assert "If Aidan is out of office, you can start a vote" in bot.last
+
+
+def test_rival_after_the_limit_gets_both_buttons(bot):
+    bot.on((turn("Aidan"), TURN_LIMIT_S))
+    bot.dm(HELDI, "whose turn is it")
+    assert bot.button and bot.away_button
+
+
+def test_out_of_office_click_opens_one_vote(bot):
+    rec = turn("Aidan")
+    bot.on((rec, TURN_LIMIT_S))
+    bot.dm(HELDI, "whose turn is it")
+    blocks = bot.replies[-1][1]["blocks"]
+    bot.click(HELDI, key(rec), action=out_of_office.VOTE_ACTION, blocks=blocks)
+    assert len(bot.votes) == 1
+    assert bot.votes[0].startswith(f"<@{AIDAN}> Heldi says you're out of office")
+    assert "Nzinga Mbande, turn 10" in bot.votes[0] and "3 players have voted :+1:" in bot.votes[0]
+    assert bot.last.startswith(f"Vote started in <#{out_of_office.CHANNEL}>. It closes at ")
+    # The out-of-office button is gone from the reply; the Play button stays.
+    kept = [e["action_id"] for b in bot.client.updates[-1]["blocks"] if b["type"] == "actions" for e in b["elements"]]
+    assert kept == [slack_bot.PLAY_ACTION]
+    assert not bot.runs
+
+    bot.click(JOHN, key(rec), action=out_of_office.VOTE_ACTION)
+    assert "already open" in bot.last and len(bot.votes) == 1
+
+    bot.dm(JOHN, "whose turn is it")
+    assert "A vote on Aidan being out of office is open" in bot.last
+    assert bot.away_button is None and bot.button  # the admin still gets Play
+
+
+def test_out_of_office_click_by_the_owner_or_on_an_ended_turn_opens_nothing(bot):
+    rec = turn("Aidan")
+    bot.on((rec, HALF_HOUR))
+    bot.click(AIDAN, key(rec), action=out_of_office.VOTE_ACTION)
+    assert bot.last == "It's your turn: DM me what you want done with it."
+    bot.on((turn("Jake DuRegger", leader="LEADER_VICTORIA"), 0))
+    bot.click(HELDI, key(rec), action=out_of_office.VOTE_ACTION)
+    assert "That turn is over" in bot.last
+    assert not bot.votes and not bot.client.updates
+
+
+def test_out_of_office_click_from_a_stranger_is_refused(bot):
+    rec = turn("Aidan")
+    bot.on((rec, HALF_HOUR))
+    bot.click("U000STRANGER", key(rec), action=out_of_office.VOTE_ACTION)
+    assert bot.last == slack_bot.REJECTION and not bot.votes
+
+
+def test_no_vote_button_for_a_player_already_out(bot):
+    away_today("Aidan")
+    bot.on((turn("Aidan"), HALF_HOUR))
+    bot.dm(HELDI, "whose turn is it")
+    assert "Aidan is out of office today, so I'm playing their turns." in bot.last
+    assert bot.away_button is None
+    bot.click(HELDI, key(turn("Aidan")), action=out_of_office.VOTE_ACTION)
+    assert "already out of office" in bot.last and not bot.votes
+
+
+def test_im_back_ends_the_day_out_of_office(bot):
+    away_today("Aidan")
+    back = {"type": "actions", "elements": [{"action_id": out_of_office.BACK_ACTION, "value": "Aidan"}]}
+    bot.click(HELDI, "Aidan", channel=f"D{HELDI}", action=out_of_office.BACK_ACTION, blocks=[back])
+    assert bot.last == "That button is for the player it was sent to."
+    assert out_of_office.is_away("Aidan")
+
+    bot.click(AIDAN, "Aidan", channel=f"D{AIDAN}", action=out_of_office.BACK_ACTION, blocks=[back])
+    assert bot.last == "Welcome back: I won't start any more of your turns."
+    assert not out_of_office.is_away("Aidan")
+    assert bot.client.updates[-1]["blocks"] == []  # the button is gone
+    assert not bot.asked  # no game poll needed
+
+
+def test_im_back_works_while_a_run_holds_the_lock(bot):
+    away_today("Aidan")
+    other = RunLock(bot.lock_path)  # the out-of-office service, playing Aidan's turn
+    assert other.try_acquire("Aidan's turn while they're out of office")
+    try:
+        bot.click(AIDAN, "Aidan", channel=f"D{AIDAN}", action=out_of_office.BACK_ACTION)
+        assert bot.last.startswith("Welcome back")
+        bot.on((turn("Aidan"), HALF_HOUR))
+        bot.dm(HELDI, "whose turn is it")
+        assert bot.last.startswith("Busy with Aidan's turn while they're out of office (started 1 min ago).")
+    finally:
+        other.release()
+    bot.dm(HELDI, "whose turn is it")
+    assert "It's Aidan's turn" in bot.last

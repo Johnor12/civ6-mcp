@@ -131,10 +131,21 @@ only decides who may do what; what a message means is up to Claude.
   button on anyone else's turn without waiting for the hour, and is the
   only one whose click counts before then. Claude is told the admin asked
   for the turn; the admin's message still never reaches it.
+- **Out of office.** The same reply has a "Cameron is out of office"
+  button at any time. Clicking it posts a vote in
+  #proj-diplomatic-relations that @'s Cameron. Ten minutes later
+  `scripts/out_of_office.py` counts the reactions: with :+1: from 3
+  players and no :-1: from Cameron, Cameron is out of office until
+  midnight and the bot plays that turn and every later turn of Cameron's
+  that day, once each, from a fixed prompt. Other players' :-1: don't
+  block it; a vote on a turn that ended before it closed changes nothing.
+  Cameron gets each run's progress by DM, with an "I'm back" button that
+  ends the day out of office; the outcome of each turn goes in the vote's
+  thread. Votes and who is out are in `scripts/data/out_of_office.json`.
 
 ```bash
 cp .env.example .env      # bot token, app token
-uv run scripts/start.py   # the turn logger, the announcer, the turn report and the bot
+uv run scripts/start.py   # the turn logger, the announcer, the turn report, the out-of-office service and the bot
 ```
 
 The Slack app needs Socket Mode on, an app-level token with
@@ -190,8 +201,10 @@ and what the viewer can do about it), and an invite to
   "Research: Pottery", the end-turn result), Claude's narration and failed
   actions. Game queries and doc lookups only change a "now" line under the
   list. The console logs the same lines; the final reply is a new message.
-- **One run at a time.** A message during a run gets a busy reply; a run is
-  killed after 90 minutes.
+- **One run at a time.** The bot and the out-of-office service share a
+  lock file (`scripts/claude_runs.py`), so only one Claude run drives the
+  game. A message during a run gets a busy reply, and an out-of-office turn
+  waits for the next minute's check; a run is killed after 90 minutes.
 - **Tight permissions.** The headless run may use the civ6 tools and fetch
   the BBG docs (`curl`, WebFetch on civ6bbg.github.io, Read/Grep/Glob);
   everything else is denied, including reading `.env` and the diaries in

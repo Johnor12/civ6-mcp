@@ -634,7 +634,8 @@ class GameState:
             if not (verify and verify[0] == "MATCH"):
                 return (
                     f"Error: SILENT_FAILURE|{tech_name} was requested but the game "
-                    "did not switch research to it. Retry the call."
+                    "did not switch research to it. Check that it is listed as available "
+                    "in get_tech_civics."
                 )
         return result
 
@@ -657,7 +658,8 @@ class GameState:
             if not (verify and verify[0] == "MATCH"):
                 return (
                     f"Error: SILENT_FAILURE|{civic_name} was requested but the game "
-                    "did not switch the civic to it. Retry the call."
+                    "did not switch the civic to it. Check that it is listed as available "
+                    "in get_tech_civics."
                 )
         return result
 
