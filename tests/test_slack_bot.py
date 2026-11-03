@@ -298,13 +298,13 @@ def test_home_tab_tells_the_owner_to_dm(bot):
 def test_home_tab_gives_a_rival_the_timer(bot):
     bot.on((turn("Aidan"), HALF_HOUR))
     bot.open_home(HELDI)
-    assert "It's Aidan's turn" in bot.home and "so in 1h 30m. DM me then for the button" in bot.home
+    assert "It's Aidan's turn" in bot.home and "so in 30m. DM me then for the button" in bot.home
 
 
 def test_home_tab_after_the_limit_points_a_rival_to_the_button(bot):
     bot.on((turn("Aidan"), TURN_LIMIT_S))
     bot.open_home(HELDI)
-    assert "past the 2h limit: DM me for a button" in bot.home
+    assert "past the 1h limit: DM me for a button" in bot.home
 
 
 def test_home_tab_tells_the_admin_about_the_button(bot):

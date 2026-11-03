@@ -25,8 +25,8 @@ message fell due:
 - After turn_logger.TURN_LIMIT_S: a last message from the bot, saying any
   other player can now have the turn played through the Slack bot.
 
-Only the latest message due is sent, so a turn found two hours in gets the
-two-hour message alone. A reminder counts as sent when the bot has @'d the
+Only the latest message due is sent, so a turn found an hour in gets the
+one-hour message alone. A reminder counts as sent when the bot has @'d the
 player in the channel after it fell due, so a restart sends nothing twice.
 Thread replies are not read.
 
@@ -62,7 +62,7 @@ log = logging.getLogger("turn_announcer")
 
 CHANNEL = "C09AZ6CR7QE"  # #proj-diplomatic-relations
 POLL_S = 60
-REMINDER_S = 3600  # workday time before the first reminder
+REMINDER_S = 1800  # workday time before the first reminder
 LOOKBACK_S = 24 * 3600  # how far back the turn message looks for the bot's last post
 LOCK_PATH = REPO_ROOT / "scripts" / "data" / "turn_announcer.lock"
 SAVES_DIR: Path | None = None  # hotseat save folder for turn_times; None is the game's

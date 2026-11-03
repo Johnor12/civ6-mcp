@@ -62,7 +62,7 @@ MIDTURN_SAVE_TAG = f"{hotseat.SAVE_TAG} MIDTURN"  # a save taken after the playe
 WORKDAY_START_HOUR = 9
 WORKDAY_END_HOUR = 17
 WORKDAY = f"{WORKDAY_START_HOUR}:00–{WORKDAY_END_HOUR}:00, Mon–Fri"
-TURN_LIMIT_S = 2 * 3600  # workday time after which another player may have a turn played
+TURN_LIMIT_S = 3600  # workday time after which another player may have a turn played
 
 
 @dataclass(frozen=True)

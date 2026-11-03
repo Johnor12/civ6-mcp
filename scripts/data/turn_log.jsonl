@@ -71,3 +71,45 @@
 {"at": "2026-10-30T11:57:01-04:00", "turn": 11, "leader": "LEADER_CLEOPATRA", "player": "Aaron"}
 {"at": "2026-10-30T12:00:00-04:00", "turn": 11, "leader": "LEADER_NZINGA_MBANDE", "player": "Aidan"}
 {"at": "2026-10-30T12:03:00-04:00", "turn": 11, "leader": "LEADER_VICTORIA", "player": "Jake DuRegger"}
+{"at": "2026-10-30T13:18:00-04:00", "turn": 11, "leader": "LEADER_SUK_AL_HASAN", "player": "Jeffson"}
+{"at": "2026-10-30T14:10:00-04:00", "turn": 11, "leader": "LEADER_JFD_STANISLAW", "player": "Mike"}
+{"at": "2026-10-30T14:19:51-04:00", "turn": 11, "leader": "LEADER_JULIUS_CAESAR", "player": "Cameron"}
+{"at": "2026-10-30T14:48:00-04:00", "turn": 11, "leader": "LEADER_GITARJA", "player": "Heldi"}
+{"at": "2026-10-30T14:56:00-04:00", "turn": 11, "leader": "LEADER_GENGHIS_KHAN", "player": "Randy"}
+{"at": "2026-10-30T15:04:00-04:00", "turn": 11, "leader": "LEADER_AMANITORE", "player": "Hunter"}
+{"at": "2026-10-30T15:17:00-04:00", "turn": 11, "leader": "LEADER_LIME_THULE_DAVE", "player": "John"}
+{"at": "2026-10-30T15:24:00-04:00", "turn": 12, "leader": "LEADER_CLEOPATRA", "player": "Aaron"}
+{"at": "2026-10-30T15:26:00-04:00", "turn": 11, "leader": "LEADER_LIME_THULE_DAVE", "player": "John"}
+{"at": "2026-10-30T15:29:05-04:00", "turn": 12, "leader": "LEADER_CLEOPATRA", "player": "Aaron"}
+{"at": "2026-10-30T15:30:00-04:00", "turn": 12, "leader": "LEADER_NZINGA_MBANDE", "player": "Aidan"}
+{"at": "2026-10-30T15:32:00-04:00", "turn": 12, "leader": "LEADER_VICTORIA", "player": "Jake DuRegger"}
+{"at": "2026-10-30T15:36:00-04:00", "turn": 12, "leader": "LEADER_SUK_AL_HASAN", "player": "Jeffson"}
+{"at": "2026-10-30T15:39:00-04:00", "turn": 12, "leader": "LEADER_JFD_STANISLAW", "player": "Mike"}
+{"at": "2026-10-30T15:42:00-04:00", "turn": 12, "leader": "LEADER_JULIUS_CAESAR", "player": "Cameron"}
+{"at": "2026-10-30T15:54:00-04:00", "turn": 12, "leader": "LEADER_GITARJA", "player": "Heldi"}
+{"at": "2026-10-30T15:59:00-04:00", "turn": 12, "leader": "LEADER_GENGHIS_KHAN", "player": "Randy"}
+{"at": "2026-10-30T16:04:00-04:00", "turn": 12, "leader": "LEADER_AMANITORE", "player": "Hunter"}
+{"at": "2026-10-30T16:30:00-04:00", "turn": 12, "leader": "LEADER_LIME_THULE_DAVE", "player": "John"}
+{"at": "2026-10-30T16:38:00-04:00", "turn": 13, "leader": "LEADER_CLEOPATRA", "player": "Aaron"}
+{"at": "2026-11-02T09:20:00-05:00", "turn": 13, "leader": "LEADER_NZINGA_MBANDE", "player": "Aidan"}
+{"at": "2026-11-02T09:22:00-05:00", "turn": 13, "leader": "LEADER_VICTORIA", "player": "Jake DuRegger"}
+{"at": "2026-11-02T09:32:00-05:00", "turn": 13, "leader": "LEADER_SUK_AL_HASAN", "player": "Jeffson"}
+{"at": "2026-11-02T10:00:02-05:00", "turn": 13, "leader": "LEADER_JFD_STANISLAW", "player": "Mike"}
+{"at": "2026-11-02T10:23:00-05:00", "turn": 13, "leader": "LEADER_JULIUS_CAESAR", "player": "Cameron"}
+{"at": "2026-11-02T10:25:00-05:00", "turn": 13, "leader": "LEADER_GITARJA", "player": "Heldi"}
+{"at": "2026-11-02T10:30:00-05:00", "turn": 13, "leader": "LEADER_GENGHIS_KHAN", "player": "Randy"}
+{"at": "2026-11-02T10:44:00-05:00", "turn": 13, "leader": "LEADER_AMANITORE", "player": "Hunter"}
+{"at": "2026-11-02T11:06:00-05:00", "turn": 13, "leader": "LEADER_LIME_THULE_DAVE", "player": "John"}
+{"at": "2026-11-02T11:38:00-05:00", "turn": 14, "leader": "LEADER_CLEOPATRA", "player": "Aaron"}
+{"at": "2026-11-02T11:46:00-05:00", "turn": 14, "leader": "LEADER_NZINGA_MBANDE", "player": "Aidan"}
+{"at": "2026-11-02T11:48:00-05:00", "turn": 14, "leader": "LEADER_VICTORIA", "player": "Jake DuRegger"}
+{"at": "2026-11-02T11:54:00-05:00", "turn": 14, "leader": "LEADER_SUK_AL_HASAN", "player": "Jeffson"}
+{"at": "2026-11-02T14:02:00-05:00", "turn": 14, "leader": "LEADER_JFD_STANISLAW", "player": "Mike"}
+{"at": "2026-11-02T14:24:00-05:00", "turn": 14, "leader": "LEADER_JULIUS_CAESAR", "player": "Cameron"}
+{"at": "2026-11-02T14:26:00-05:00", "turn": 14, "leader": "LEADER_GITARJA", "player": "Heldi"}
+{"at": "2026-11-02T14:28:00-05:00", "turn": 14, "leader": "LEADER_GENGHIS_KHAN", "player": "Randy"}
+{"at": "2026-11-02T14:38:35-05:00", "turn": 14, "leader": "LEADER_AMANITORE", "player": "Hunter"}
+{"at": "2026-11-02T15:30:46-05:00", "turn": 14, "leader": "LEADER_LIME_THULE_DAVE", "player": "John"}
+{"at": "2026-11-02T16:39:25-05:00", "turn": 15, "leader": "LEADER_CLEOPATRA", "player": "Aaron"}
+{"at": "2026-11-02T16:58:00-05:00", "turn": 15, "leader": "LEADER_NZINGA_MBANDE", "player": "Aidan"}
+{"at": "2026-11-03T09:40:00-05:00", "turn": 15, "leader": "LEADER_VICTORIA", "player": "Jake DuRegger"}

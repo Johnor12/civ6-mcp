@@ -175,24 +175,24 @@ class TestRecentTurns:
 
 
 class TestReminders:
-    def test_one_hour_then_two_hours(self, slack):
+    def test_half_an_hour_then_an_hour(self, slack):
         _turn(_at(0, 10))
         assert _check(slack, _at(0, 10, 1))
-        assert not _check(slack, _at(0, 10, 55))
+        assert not _check(slack, _at(0, 10, 25))
+        assert _check(slack, _at(0, 10, 30))
+        assert slack.posts[-1].startswith(f"<@{RANDY}> reminder: your turn (Genghis Khan, turn 3) has been waiting 30m")
+        assert not _check(slack, _at(0, 10, 35))
         assert _check(slack, _at(0, 11))
-        assert slack.posts[-1].startswith(f"<@{RANDY}> reminder: your turn (Genghis Khan, turn 3) has been waiting 1h")
-        assert not _check(slack, _at(0, 11, 5))
-        assert _check(slack, _at(0, 12))
         assert "any other player can now have it played for you through this app" in slack.posts[-1]
-        assert not _check(slack, _at(0, 14))
+        assert not _check(slack, _at(0, 13))
         assert len(slack.posts) == 3
 
     def test_only_the_bots_own_mention_counts_as_a_reminder(self, slack):
         _turn(_at(0, 10))
         slack.say(_at(0, 10), f"<@{RANDY}>")
         assert not _check(slack, _at(0, 10, 1))
-        slack.say(_at(0, 11, 2), f"<@{RANDY}> hurry up")
-        assert _check(slack, _at(0, 11, 5))
+        slack.say(_at(0, 10, 32), f"<@{RANDY}> hurry up")
+        assert _check(slack, _at(0, 10, 35))
         assert "reminder" in slack.posts[-1]
 
     def test_a_restart_sends_nothing_twice(self, slack, monkeypatch):
@@ -209,10 +209,10 @@ class TestReminders:
         assert len(slack.posts) == 1 and "through this app" in slack.posts[0]
 
     def test_the_clock_runs_in_workday_hours_only(self, slack):
-        _turn(_at(4, 16, 30))  # Friday afternoon
-        assert _check(slack, _at(4, 16, 31))
-        assert not _check(slack, _at(7, 9, 25))  # Monday: 55 min so far
-        assert _check(slack, _at(7, 9, 30))
+        _turn(_at(4, 16, 45))  # Friday afternoon
+        assert _check(slack, _at(4, 16, 46))
+        assert not _check(slack, _at(7, 9, 10))  # Monday: 25 min so far
+        assert _check(slack, _at(7, 9, 15))
         assert "reminder" in slack.posts[-1]
 
 

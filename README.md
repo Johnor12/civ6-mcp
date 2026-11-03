@@ -120,7 +120,7 @@ only decides who may do what; what a message means is up to Claude.
   for. Mentioning the bot in a channel on your own turn only gets "DM me",
   since the other players read the channel.
 - **Someone else's turn: DM or mention the bot.** You get whose turn it is
-  and how long it has lasted. Once that is 2 hours of workday time
+  and how long it has lasted. Once that is 1 hour of workday time
   (9:00–17:00, Mon–Fri), the reply has a "Play Cameron's turn" button;
   clicking it (and confirming) has Claude play the turn from a fixed
   prompt. Nothing you wrote reaches Claude. The absent player gets the
@@ -128,7 +128,7 @@ only decides who may do what; what a message means is up to Claude.
   afterwards. A button left over from a turn that has since ended does
   nothing.
 - **Admin.** The player marked `admin=True` in `PLAYERS` (John) gets that
-  button on anyone else's turn without waiting for the 2 hours, and is the
+  button on anyone else's turn without waiting for the hour, and is the
   only one whose click counts before then. Claude is told the admin asked
   for the turn; the admin's message still never reaches it.
 
@@ -164,7 +164,7 @@ and what the viewer can do about it), and an invite to
   #proj-diplomatic-relations: "it's your turn" when the turn begins (unless
   someone already @'d them there since), with every turn finished since
   the bot's last post in the channel and how long each took in workday
-  time; a reminder after 1 hour of workday time; and after 2 hours a last
+  time; a reminder after 30 minutes of workday time; and after 1 hour a last
   one saying any other player can now have the turn played through the
   bot. The bot calls it right after each of its
   runs, so a turn the bot ended reaches the next player at once; a turn
