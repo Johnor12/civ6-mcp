@@ -8,11 +8,14 @@
     uv run scripts/turn_times.py            # every player's average, slowest first
     uv run scripts/turn_times.py --turns    # plus every turn and what its timing rests on
 
-The turn log (scripts/turn_logger.py) has a row for the first poll that saw
-each player's turn-change screen, so a row says that turn had begun by then
-and no more than one poll earlier (the interval in force at the time: see
-POLL_CHANGES). A poll can miss a player who finished
-within the interval, so the sequence of player-turns is rebuilt from the
+The turn log (scripts/turn_logger.py) has a row for each player-turn it saw
+begin. Since 2026-11-03 nearly every row comes from the bridge mod's turn
+line in Lua.log and has the time the turn began (poll_s 0). The older rows
+came from polls: such a row says the turn had begun by then and no more
+than one poll earlier (the interval the row carries as poll_s, or for rows
+from before 2026-11-03, the one POLL_CHANGES gives for their time). A poll
+could miss a player who finished within the interval, so the sequence of
+player-turns is rebuilt from the
 seat order (SEATS) and the saves in the hotseat folder fill in what the log
 missed: a save named "<LEADER> <turn> <year>..." (the game's default name,
 which the players keep and which the tooling's "MCP" saves start with) says
@@ -50,11 +53,10 @@ from civ_mcp.hotseat import hotseat_save_files  # noqa: E402
 
 log = logging.getLogger("turn_times")
 
-# How often the turn logger has polled, by the moment each interval took
-# effect; the first entry is the interval the log began with. The last entry
-# must be turn_logger.POLL_S: when the logger's interval changes, add the
-# moment it was restarted with the new one here, or every later row gets the
-# wrong window and the error compounds.
+# How often the turn logger polled before its rows carried the interval
+# (poll_s, since 2026-11-03), by the moment each interval took effect; the
+# first entry is the interval the log began with. Only rows without poll_s
+# use it, so a later change of turn_logger.POLL_S needs no entry here.
 POLL_CHANGES: tuple[tuple[datetime, int], ...] = (
     (datetime.min, 300),
     (datetime(2026, 10, 29, 16, 21), 60),  # commit 9158f04, "shorten polling interval to 1 minute"
@@ -86,7 +88,7 @@ def leader_display(leader: str) -> str:
 
 
 def poll_s_at(when: datetime) -> int:
-    """The logger's polling interval, in seconds, when a row was written at `when`."""
+    """The logger's polling interval, in seconds, when a row without its own poll_s was written at `when`."""
     return next(seconds for since, seconds in reversed(POLL_CHANGES) if since <= when)
 
 
@@ -97,6 +99,7 @@ class PlayerTurn:
     leader: str
     player: str
     rows: list[datetime] = field(default_factory=list)  # log rows of this turn
+    poll_s: int = 0  # the logger's interval when the first of them was written
     saves: list[tuple[datetime, str]] = field(default_factory=list)  # (written at, save name)
     autosave: datetime | None = None  # the game's autosave that opened this game turn
     start: datetime | None = None
@@ -127,11 +130,14 @@ class PlayerAverage:
     max_minutes: float
 
 
-def player_turns(records: list[turn_logger.TurnRecord]) -> list[PlayerTurn]:
+def player_turns(
+    records: list[turn_logger.TurnRecord], poll_at: Callable[[datetime], int] = poll_s_at
+) -> list[PlayerTurn]:
     """Every player-turn from the first row to the last, in seat order, with the rows that saw it.
 
-    Rows that go backwards (a reload of an earlier save) are skipped with
-    a warning.
+    Each takes the logger's interval from its first row, or from `poll_at`
+    when that row predates poll_s. Rows that go backwards (a reload of an
+    earlier save) are skipped with a warning.
     """
     seat_of = {leader: i for i, (leader, _) in enumerate(SEATS)}
     names: dict[str, str] = {}
@@ -158,6 +164,8 @@ def player_turns(records: list[turn_logger.TurnRecord]) -> list[PlayerTurn]:
             seq.append(cur)
             seat = (cur.seat + 1) % len(SEATS)
             cur = new(cur.turn + (seat == 0), seat)
+        if not cur.rows:
+            cur.poll_s = r.poll_s if r.poll_s is not None else poll_at(r.at)
         cur.rows.append(r.at)
     seq.append(cur)
     return seq
@@ -173,14 +181,11 @@ def _rows_after(seq: list[PlayerTurn], k: int) -> datetime | None:
     return min(times) if times else None
 
 
-def attach_saves(
-    seq: list[PlayerTurn], saves_dir: Path | None, poll_at: Callable[[datetime], int] = poll_s_at
-) -> list[str]:
+def attach_saves(seq: list[PlayerTurn], saves_dir: Path | None) -> list[str]:
     """Give each player-turn the saves written during it. Returns the saves that fit nowhere."""
     index = {(pt.turn, pt.leader): k for k, pt in enumerate(seq)}
     leader_of = {name.casefold(): leader for leader, name in SEATS}
-    first_row = min(seq[0].rows)
-    begun = first_row - timedelta(seconds=poll_at(first_row))
+    begun = min(seq[0].rows) - timedelta(seconds=seq[0].poll_s)
     skipped: list[str] = []
     autosaves: list[tuple[datetime, str]] = []
     for f, tag in hotseat_save_files(saves_dir):
@@ -230,11 +235,10 @@ def _autosave_turn(seq: list[PlayerTurn], at: datetime) -> int | None:
     return None
 
 
-def estimate_starts(seq: list[PlayerTurn], poll_at: Callable[[datetime], int] = poll_s_at) -> None:
+def estimate_starts(seq: list[PlayerTurn]) -> None:
     """Place every player-turn's start: exactly, in the middle of its window, or spaced between neighbours.
 
-    `poll_at` gives the logger's interval when a row was written: the turn
-    had begun no more than that long before its first row.
+    A turn with rows had begun no more than its poll_s before the first.
     """
     last_known: datetime | None = None  # the latest moment an earlier turn was known to be under way
     for pt in seq:
@@ -246,8 +250,7 @@ def estimate_starts(seq: list[PlayerTurn], poll_at: Callable[[datetime], int] = 
             hi = min(evidence)
             bounds = [last_known] if last_known is not None else []
             if pt.rows:
-                first_row = min(pt.rows)
-                bounds.append(first_row - timedelta(seconds=poll_at(first_row)))
+                bounds.append(min(pt.rows) - timedelta(seconds=pt.poll_s))
             lo = min(max(bounds), hi) if bounds else hi
             pt.earliest, pt.latest = lo, hi
             pt.start = lo + (hi - lo) / 2
@@ -289,20 +292,15 @@ def compute(
     """The player-turns the log covers, with their starts placed, and the saves that fit nowhere.
 
     The last player-turn is the one in progress; it has a start but no end.
-    Both lists are empty while the log is. ValueError for a leader not in SEATS.
+    `poll_at` gives the interval of rows without poll_s. Both lists are
+    empty while the log is. ValueError for a leader not in SEATS.
     """
-    if POLL_CHANGES[-1][1] != turn_logger.POLL_S:
-        log.warning(
-            "the turn logger polls every %d s but POLL_CHANGES ends at %d s: rows since the change "
-            "get the wrong window until the moment it took effect is added",
-            turn_logger.POLL_S, POLL_CHANGES[-1][1],
-        )
     records = turn_logger.read_records(log_path)
     if not records:
         return [], []
-    seq = player_turns(records)
-    skipped = attach_saves(seq, saves_dir, poll_at)
-    estimate_starts(seq, poll_at)
+    seq = player_turns(records, poll_at)
+    skipped = attach_saves(seq, saves_dir)
+    estimate_starts(seq)
     return seq, skipped
 
 
@@ -360,6 +358,13 @@ def hm(minutes: float) -> str:
     return f"{h}h {m:02d}m" if h else f"{m}m"
 
 
+def hms(minutes: float) -> str:
+    """4.37 -> '4m 22s', 95.4 -> '1h 35m 24s'."""
+    h, rest = divmod(round(minutes * 60), 3600)
+    m, s = divmod(rest, 60)
+    return f"{h}h {m:02d}m {s:02d}s" if h else f"{m}m {s:02d}s"
+
+
 def report(seq: list[PlayerTurn], skipped: list[str], turns: bool = False) -> str:
     done = finished(seq)
     if not done:
@@ -369,7 +374,7 @@ def report(seq: list[PlayerTurn], skipped: list[str], turns: bool = False) -> st
         for pt, end in done:
             lines.append(
                 f"T{pt.turn:<3}{pt.player:<14}{pt.start:%a %d %H:%M:%S} -> {end:%a %H:%M:%S}  "
-                f"{hm(minutes(pt, end)):>8}  {pt.basis:<13}"
+                f"{hms(minutes(pt, end)):>11}  {pt.basis:<13}"
                 f"window {pt.earliest:%H:%M:%S}-{pt.latest:%H:%M:%S}  "
                 + "; ".join(
                     [f"log {t:%H:%M:%S}" for t in sorted(pt.rows)]
@@ -378,14 +383,14 @@ def report(seq: list[PlayerTurn], skipped: list[str], turns: bool = False) -> st
                 )
             )
         lines.append("")
-    lines.append(f"{'player':<14}{'turns':>6}{'guessed':>8}{'average':>9}{'median':>8}{'longest':>9}")
+    lines.append(f"{'player':<14}{'turns':>6}{'guessed':>8}{'average':>12}{'median':>12}{'longest':>12}")
     for a in player_averages(done):
         lines.append(
-            f"{a.player:<14}{a.turns:>6}{a.guessed:>8}{hm(a.mean_minutes):>9}{hm(a.median_minutes):>8}"
-            f"{hm(a.max_minutes):>9}"
+            f"{a.player:<14}{a.turns:>6}{a.guessed:>8}{hms(a.mean_minutes):>12}{hms(a.median_minutes):>12}"
+            f"{hms(a.max_minutes):>12}"
         )
     median = statistics.median(minutes(pt, end) for pt, end in done)
-    lines.append(f"{'ALL':<14}{len(done):>6}{'':>8}{hm(mean_minutes(done)):>9}{hm(median):>8}")
+    lines.append(f"{'ALL':<14}{len(done):>6}{'':>8}{hms(mean_minutes(done)):>12}{hms(median):>12}")
     first, last = seq[0].start, seq[-1].start
     lines.append(
         f"\nMinutes of workday time ({turn_logger.WORKDAY}). "

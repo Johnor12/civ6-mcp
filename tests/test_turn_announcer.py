@@ -71,7 +71,7 @@ class FakeSlack:
 @pytest.fixture
 def slack(tmp_path, monkeypatch) -> FakeSlack:
     monkeypatch.setattr(turn_logger, "TURN_LOG_PATH", tmp_path / "turn_log.jsonl")
-    monkeypatch.setattr(turn_logger, "log_current_turn", lambda path=None: True)  # no game
+    monkeypatch.setattr(turn_logger, "log_current_turn", lambda path=None: pytest.fail("asked the game"))
     monkeypatch.setattr(turn_announcer, "LOCK_PATH", tmp_path / "turn_announcer.lock")
     monkeypatch.setattr(turn_announcer, "SAVES_DIR", tmp_path / "saves")  # no saves
     monkeypatch.setattr(turn_announcer, "_sent", set())
@@ -80,7 +80,8 @@ def slack(tmp_path, monkeypatch) -> FakeSlack:
 
 
 def _turn(at: datetime, player: str = "Randy", turn: int = 3, leader: str = "LEADER_GENGHIS_KHAN") -> None:
-    turn_logger.record(turn, leader, player, at)
+    """The row the turn logger writes from the turn's line in Lua.log: its exact start."""
+    turn_logger.record(turn, leader, player, at, poll_s=0)
 
 
 def _check(slack: FakeSlack, at: datetime) -> bool:

@@ -25,8 +25,10 @@ that @'s the player whose turn it is and asks everyone to react :+1: or
   note with an "I'm back" button (the bot answers it with come_back()),
   and the outcome to the vote's thread.
 
-Runs take claude_runs.RunLock, which the bot holds while it handles a
-message or plays a turn, so a turn waits for the next poll when the bot is
+Whose turn it is comes from the turn log (scripts/data/turn_log.jsonl),
+which the turn logger keeps within a second of the game; this service never
+asks the game itself. Runs take claude_runs.RunLock, which the bot holds
+while it handles a message or plays a turn, so a turn waits for the next poll when the bot is
 busy. Votes, who is out and which turns were played live in
 scripts/data/out_of_office.json, which both processes read and write under
 a lock file. scripts/start.py runs this next to the bot; the bot token
@@ -213,7 +215,7 @@ def play_if_away(client, claude: str, lock: RunLock, now: datetime) -> bool:
         log.info("%s is out of office, but a run is under way; trying again next poll", rec.player)
         return False
     try:
-        current = whose_turn()  # the log can be a poll behind the game
+        current = whose_turn()  # once more, now that no run can end it
         if current is None or not _due(current[0], now):
             return False
         rec = current[0]
@@ -265,11 +267,7 @@ def play(client, claude: str, rec: TurnRecord, vote_ts: str | None) -> None:
 
 
 def whose_turn() -> tuple[TurnRecord, float] | None:
-    """The current turn and its workday seconds so far, from the turn log after one fresh poll."""
-    try:
-        turn_logger.log_current_turn()
-    except Exception:
-        log.exception("turn poll failed")
+    """The current turn and its workday seconds so far, from the turn log."""
     return turn_logger.duration_of_current_turn()
 
 
@@ -329,7 +327,6 @@ def main() -> None:
 
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-    logging.getLogger("civ_mcp").setLevel(logging.WARNING)  # a bridge connect per poll
     token = dotenv_values(REPO_ROOT / ".env").get("SLACK_BOT_TOKEN")
     if not token:
         raise SystemExit(f"SLACK_BOT_TOKEN must be set in {REPO_ROOT / '.env'}")

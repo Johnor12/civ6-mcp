@@ -7,22 +7,32 @@
 
     uv run scripts/turn_logger.py
 
-Every POLL_S it asks the game whose turn it is (civ_mcp's
-hotseat.whose_turn, over the same bridge the MCP server uses) and appends
-a row to scripts/data/turn_log.jsonl when the turn or the player differs
-from the last row: the history behind the Slack turn timer. The Slack bot
-(scripts/slack_bot.py) and the turn announcer (scripts/turn_announcer.py)
-import this module, have it log the current turn and read the log with
-duration_of_current_turn().
+Every WATCH_S it reads what the game's Lua.log gained (civ_mcp.turn_watch)
+and appends a row to scripts/data/turn_log.jsonl for each turn line the
+bridge mod printed there whose turn or player differs from the last row:
+the history behind the Slack bot's turn timer and the turn times
+(scripts/turn_times.py). Such a row carries the turn line's own time,
+which is the game's clock when the turn began, and poll_s 0.
 
-The same poll stands in for the Save Game button players are meant to
-press on every turn-change screen and sometimes forget. When the hotseat
-save folder holds no save of the current turn (none written since the
-turn can have begun, autosaves included, and none named after its
-turn-change screen, "<LEADER> <turn> <year>"), it saves the game the way
-end_turn does, as "<LEADER> <turn> <year> MCP", or "... MCP MIDTURN" when
-the player had already started playing. Only this script's loop saves;
-log_current_turn, which the bot and the announcer call, never does.
+The logger also asks the game whose turn it is (civ_mcp's
+hotseat.whose_turn, over the same bridge the MCP server uses) when a turn
+line or the game's own turn-change screen line comes in, and every POLL_S
+in case a turn left no line at all. A row from such a poll carries how
+late it can be as poll_s: SCREEN_POLL_S after a screen line, POLL_S
+otherwise. The turn announcer (scripts/turn_announcer.py) and the
+out-of-office service (scripts/out_of_office.py) read the log as it is,
+with duration_of_current_turn(); the Slack bot (scripts/slack_bot.py)
+first has a poll log the turn. The log, not Lua.log, is the record: the
+game empties Lua.log every time it is launched.
+
+The poll stands in for the Save Game button players are meant to press on
+every turn-change screen and sometimes forget. When the hotseat save
+folder holds no save of the current turn (none written since the turn can
+have begun, autosaves included, and none named after its turn-change
+screen, "<LEADER> <turn> <year>"), it saves the game the way end_turn
+does, as "<LEADER> <turn> <year> MCP", or "... MCP MIDTURN" when the
+player had already started playing. Only this script's loop saves;
+log_current_turn, which the bot calls, never does.
 
 The inline metadata above gives the script its own environment, so it
 never syncs the project venv that the running MCP server holds open;
@@ -44,18 +54,22 @@ from typing import TYPE_CHECKING
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
-from civ_mcp import hotseat  # noqa: E402
-from civ_mcp.bridge import hotseat_saves_dir  # noqa: E402
+from civ_mcp import hotseat, turn_watch  # noqa: E402
+from civ_mcp.bridge import default_lua_log, hotseat_saves_dir  # noqa: E402
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
     from civ_mcp.bridge import BridgeConnection
+    from civ_mcp.turn_watch import TurnStart, TurnWatch
 
 log = logging.getLogger("turn_logger")
 
 TURN_LOG_PATH = REPO_ROOT / "scripts" / "data" / "turn_log.jsonl"
-POLL_S = 60
+WATCH_S = 1  # how often the loop reads what Lua.log gained
+POLL_S = 900  # how often it asks the game anyway, in case a turn left no line in Lua.log
+SCREEN_POLL_S = 2  # how late a row is when a turn-change screen line set off its poll: one WATCH_S and the poll
+SAVE_LOOKBACK_S = 60  # how long before a turn's first row the game's autosave of it can be written
 MIDTURN_SAVE_TAG = f"{hotseat.SAVE_TAG} MIDTURN"  # a save taken after the player pressed Start Turn
 
 # Workday hours, local time, Monday to Friday.
@@ -71,6 +85,7 @@ class TurnRecord:
     turn: int
     leader: str  # e.g. LEADER_POUNDMAKER
     player: str  # hotseat player name shown on the turn-change screen
+    poll_s: int | None = None  # how late the row can be: 0 from a turn line; None in rows from before 2026-11-03
 
     @property
     def key(self) -> tuple[int, str, str]:
@@ -90,7 +105,8 @@ def read_records(path: Path | None = None) -> list[TurnRecord]:
         try:
             row = json.loads(line)
             at = datetime.fromisoformat(row["at"]).astimezone().replace(tzinfo=None)
-            records.append(TurnRecord(at, int(row["turn"]), row["leader"], row["player"]))
+            poll_s = int(row["poll_s"]) if row.get("poll_s") is not None else None
+            records.append(TurnRecord(at, int(row["turn"]), row["leader"], row["player"], poll_s))
         except (ValueError, KeyError, TypeError):
             log.warning("skipping a bad row in %s: %r", path, line)
     return records
@@ -102,30 +118,62 @@ def record(
     player: str,
     now: datetime | None = None,
     path: Path | None = None,
+    poll_s: int | None = None,
 ) -> bool:
     """Append a row when the game is on another turn or player than the last row says.
 
-    Returns True when a row was written.
+    `poll_s` is how long before `now` the turn can have begun, POLL_S
+    unless given. Returns True when a row was written.
     """
     path = path or TURN_LOG_PATH
     records = read_records(path)
     if records and records[-1].key == (turn, leader, player):
         return False
     at = (now or datetime.now()).astimezone()
-    row = {"at": at.isoformat(timespec="seconds"), "turn": turn, "leader": leader, "player": player}
+    row = {
+        "at": at.isoformat(timespec="seconds"),
+        "turn": turn,
+        "leader": leader,
+        "player": player,
+        "poll_s": POLL_S if poll_s is None else poll_s,
+    }
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "a", encoding="utf-8") as f:
         f.write(json.dumps(row) + "\n")
     return True
 
 
+def log_turn_lines(starts: Iterable[TurnStart], path: Path | None = None) -> bool:
+    """Add a row for each turn line the log has no row for yet; True when one was added.
+
+    A row from a turn line has the line's time and poll_s 0. A line older
+    than the log's last row is history the log already covers (a watch's
+    first read takes all of Lua.log), so it is passed over.
+    """
+    wrote = False
+    for start in starts:
+        records = read_records(path)
+        if records and start.at < records[-1].at:
+            continue
+        if record(start.turn, start.leader, start.player, now=start.at, path=path, poll_s=0):
+            log.info("turn %d: %s (%s)", start.turn, start.player, start.leader)
+            wrote = True
+    return wrote
+
+
 async def poll(
-    path: Path | None = None, save: bool = False, saves_dir: Path | None = None
+    path: Path | None = None,
+    save: bool = False,
+    saves_dir: Path | None = None,
+    poll_s: int | None = None,
 ) -> hotseat.HotseatStatus | None:
     """Ask the game whose turn it is, add a row if that changed and, with `save`, see that the turn has a save.
 
-    None when no hotseat turn answers: Civ 6 closed, at the main menu,
-    loading, or between two players. A save that fails is logged, not raised.
+    The row takes the time of the turn's line in Lua.log when the latest
+    line is this turn's; otherwise it is the time of the poll, with
+    `poll_s` (POLL_S unless given) as how late it can be. None when no
+    hotseat turn answers: Civ 6 closed, at the main menu, loading, or
+    between two players. A save that fails is logged, not raised.
     """
     conn = await hotseat.open_connection()
     if conn is None:
@@ -133,8 +181,13 @@ async def poll(
     st = await hotseat.whose_turn(conn)
     if st is None:
         return None
-    if record(st.turn, st.leader, st.player_name, path=path):
-        log.info("turn %d: %s (%s)", st.turn, st.player_name, st.leader)
+    watch = turn_watch.default()
+    watch.read()
+    key = (st.turn, st.leader, st.player_name)
+    line = watch.latest if watch.latest is not None and watch.latest.key == key else None
+    from_line = line is not None and log_turn_lines([line], path)
+    if not from_line and record(st.turn, st.leader, st.player_name, path=path, poll_s=poll_s):
+        log.info("turn %d: %s (%s), no turn line in Lua.log", st.turn, st.player_name, st.leader)
     if save:
         try:
             await ensure_saved(conn, st, path, saves_dir)
@@ -146,6 +199,49 @@ async def poll(
 def log_current_turn(path: Path | None = None) -> bool:
     """Ask the game whose turn it is and add a row if that changed; False when no hotseat turn answers."""
     return asyncio.run(poll(path)) is not None
+
+
+def tick(
+    watch: TurnWatch,
+    next_poll: float,
+    path: Path | None = None,
+    saves_dir: Path | None = None,
+    now: float | None = None,
+) -> float:
+    """One pass of the loop: log new turn lines, and ask the game if one came in or a poll is due.
+
+    `next_poll` and `now` are time.monotonic() values; returns the next
+    poll's. A turn line or a turn-change screen line sets off a poll at
+    once, which sees that the new turn has a save.
+    """
+    now = time.monotonic() if now is None else now
+    try:
+        screens = watch.screens
+        started = log_turn_lines(watch.read(), path)
+        if started or watch.screens != screens:
+            asyncio.run(poll(path, save=True, saves_dir=saves_dir, poll_s=SCREEN_POLL_S))
+        elif now < next_poll:
+            return next_poll
+        else:
+            asyncio.run(poll(path, save=True, saves_dir=saves_dir))
+    except Exception:
+        log.exception("turn watch failed")
+    return now + POLL_S
+
+
+def run(path: Path | None = None, saves_dir: Path | None = None) -> None:
+    """The logger's loop. Never returns.
+
+    The watch's first read is all of Lua.log since the game was launched:
+    the turns in it that the log has no row for (this script was not
+    running) are added, and the game is asked at once.
+    """
+    watch = turn_watch.default()
+    log_turn_lines(watch.read(), path)
+    next_poll = 0.0
+    while True:
+        next_poll = tick(watch, next_poll, path, saves_dir)
+        time.sleep(WATCH_S)
 
 
 async def ensure_saved(
@@ -184,18 +280,25 @@ def save_of_turn(
     """A save of the current turn among `files`, or None.
 
     The turn began after the row before its first row (the game was still
-    on the previous player then) and at most POLL_S before that first row,
-    so any save written since then is one of this turn, autosaves included.
-    A save named the way the game offers it on this turn's Save Game screen
-    (`default_name`, "<LEADER> <turn> <year>", whatever follows it) counts
-    from the previous row on, however late the turn was first logged.
+    on the previous player then) and at most the first row's poll_s before
+    it (rows from before poll_s: SAVE_LOOKBACK_S, their polls' interval),
+    so any save written since then is one of this turn. An autosave (in an
+    "auto" folder) counts from SAVE_LOOKBACK_S before the first row: the
+    game writes it while a game turn opens, a little before the first
+    seat's turn-change screen shows. A save named the way the game offers
+    it on this turn's Save Game screen (`default_name`, "<LEADER> <turn>
+    <year>", whatever follows it) counts from the previous row on, however
+    late the turn was first logged.
     """
     after_previous = previous.at.timestamp() if previous else float("-inf")
-    begun = max(after_previous, (first.at - timedelta(seconds=POLL_S)).timestamp())
+    window = SAVE_LOOKBACK_S if first.poll_s is None else first.poll_s
+    begun = max(after_previous, (first.at - timedelta(seconds=window)).timestamp())
+    autosaves_from = max(after_previous, (first.at - timedelta(seconds=max(window, SAVE_LOOKBACK_S))).timestamp())
     prefix = default_name.casefold()
     for f in files:
         mtime = f.stat().st_mtime
-        if mtime >= begun or (prefix and mtime >= after_previous and f.stem.casefold().startswith(prefix)):
+        since = autosaves_from if f.parent.name.casefold() == "auto" else begun
+        if mtime >= since or (prefix and mtime >= after_previous and f.stem.casefold().startswith(prefix)):
             return f
     return None
 
@@ -277,15 +380,11 @@ def main() -> None:
     current = duration_of_current_turn()
     last = f"{current[0].player}'s turn {current[0].turn} since {current[0].at:%a %d %b %H:%M}" if current else "none"
     log.info(
-        "asking the game every %d min; log %s, last turn: %s; a turn without a save in %s gets one",
-        POLL_S // 60, TURN_LOG_PATH, last, hotseat_saves_dir(),
+        "reading %s every %d s for turn starts, asking the game on each and every %d min; log %s, "
+        "last turn: %s; a turn without a save in %s gets one",
+        default_lua_log(), WATCH_S, POLL_S // 60, TURN_LOG_PATH, last, hotseat_saves_dir(),
     )
-    while True:
-        try:
-            asyncio.run(poll(save=True))
-        except Exception:
-            log.exception("turn poll failed")
-        time.sleep(POLL_S - time.time() % POLL_S)
+    run()
 
 
 if __name__ == "__main__":

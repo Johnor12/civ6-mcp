@@ -10,9 +10,11 @@
 
     uv run scripts/turn_announcer.py
 
-Every POLL_S it has the turn logger ask the game whose turn it is, works out
-which message the turn is due for, and reads the channel back to when that
-message fell due:
+Every POLL_S it reads whose turn it is, and since when, from the turn log
+(scripts/data/turn_log.jsonl), which the turn logger keeps within a second
+of the game from the turn lines in Lua.log; it never asks the game itself.
+It works out which message the turn is due for, and reads the channel back
+to when that message fell due:
 
 - When the turn begins: "it's your turn", unless someone has @'d the player
   in the channel since. Players ping the next one by hand when they finish,
@@ -64,6 +66,7 @@ CHANNEL = "C09AZ6CR7QE"  # #proj-diplomatic-relations
 POLL_S = 60
 REMINDER_S = 1800  # workday time before the first reminder
 LOOKBACK_S = 24 * 3600  # how far back the turn message looks for the bot's last post
+HAND_PING_S = 60  # a mention this long before the turn began counts as the hand ping
 LOCK_PATH = REPO_ROOT / "scripts" / "data" / "turn_announcer.lock"
 SAVES_DIR: Path | None = None  # hotseat save folder for turn_times; None is the game's
 
@@ -92,7 +95,7 @@ _bot_ids: tuple[str, str] | None = None  # the bot's user id and bot id
 
 
 def announce(client, now: datetime | None = None) -> bool:
-    """Ask the game whose turn it is and post the message that turn is due for, unless it is in the channel.
+    """Read whose turn it is from the turn log and post the message that turn is due for, unless it is in the channel.
 
     True when a message was posted. Never raises: a failure is logged and the
     next call tries again.
@@ -105,10 +108,6 @@ def announce(client, now: datetime | None = None) -> bool:
 
 
 def _announce(client, now: datetime) -> bool:
-    try:
-        turn_logger.log_current_turn()
-    except Exception:
-        log.exception("turn poll failed")
     current = turn_logger.duration_of_current_turn(now)
     if current is None:
         return False
@@ -124,9 +123,9 @@ def _announce(client, now: datetime) -> bool:
 
     after, template = STAGES[stage]
     if stage == 0:
-        # The turn's first row can be up to a logger poll late, and the
-        # player who finished may have pinged the next one in the meantime.
-        since, from_bot = rec.at - timedelta(seconds=turn_logger.POLL_S), False
+        # The player who finished often pings the next one just before
+        # ending the turn, so before this turn began.
+        since, from_bot = rec.at - timedelta(seconds=HAND_PING_S), False
     else:
         since, from_bot = turn_logger.workday_deadline(rec.at, after), True
     posted = False
@@ -236,7 +235,6 @@ def main() -> None:
 
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-    logging.getLogger("civ_mcp").setLevel(logging.WARNING)  # a bridge connect per poll
     token = dotenv_values(REPO_ROOT / ".env").get("SLACK_BOT_TOKEN")
     if not token:
         raise SystemExit(f"SLACK_BOT_TOKEN must be set in {REPO_ROOT / '.env'}")

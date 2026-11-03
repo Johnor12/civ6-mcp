@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 from datetime import date, datetime, timedelta
@@ -30,15 +31,24 @@ def seats(monkeypatch):
 
 
 @pytest.fixture
-def game(tmp_path):
+def game(tmp_path, monkeypatch):
     """A log and a save folder to fill: game.row(...), game.save(...), game.autosave(...), game.compute()."""
 
     class Game:
         log_path = tmp_path / "turn_log.jsonl"
         saves = tmp_path / "saves"
 
-        def row(self, when: datetime, turn: int, leader: str) -> None:
+        def row(self, when: datetime, turn: int, leader: str, poll_s: int = POLL) -> None:
+            """A row as the logger writes it, polling every `poll_s`."""
+            monkeypatch.setattr(turn_logger, "POLL_S", poll_s)
             assert turn_logger.record(turn, leader, NAMES.get(leader, "Xi"), now=when, path=self.log_path)
+
+        def legacy_row(self, when: datetime, turn: int, leader: str) -> None:
+            """A row as the logger wrote it before rows carried poll_s."""
+            row = {"at": when.astimezone().isoformat(timespec="seconds"), "turn": turn, "leader": leader,
+                   "player": NAMES.get(leader, "Xi")}
+            with open(self.log_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(row) + "\n")
 
         def _file(self, folder: Path, name: str, when: datetime) -> None:
             folder.mkdir(parents=True, exist_ok=True)
@@ -67,13 +77,12 @@ def test_poll_interval_follows_the_logger_history():
     assert turn_times.poll_s_at(datetime(2026, 10, 27, 10)) == 300
     assert turn_times.poll_s_at(datetime(2026, 10, 29, 16, 20, 59)) == 300
     assert turn_times.poll_s_at(datetime(2026, 10, 29, 16, 21)) == 60
-    assert turn_times.poll_s_at(datetime(2027, 1, 1)) == turn_logger.POLL_S
-    assert turn_times.POLL_CHANGES[-1][1] == turn_logger.POLL_S  # keep POLL_CHANGES current
+    assert turn_times.poll_s_at(datetime(2027, 1, 1)) == 60  # rows written since 2026-11-03 carry their own
 
 
-def test_each_row_gets_the_window_of_its_day(game):
-    game.row(datetime(2026, 10, 29, 16, 10), 9, "LEADER_A")  # still 5-minute polls
-    game.row(datetime(2026, 10, 29, 16, 50), 9, "LEADER_B")  # 1-minute polls by then
+def test_each_legacy_row_gets_the_window_of_its_day(game):
+    game.legacy_row(datetime(2026, 10, 29, 16, 10), 9, "LEADER_A")  # still 5-minute polls
+    game.legacy_row(datetime(2026, 10, 29, 16, 50), 9, "LEADER_B")  # 1-minute polls by then
     seq, _ = game.compute(turn_times.poll_s_at)
     ann, bob = seq
     assert (ann.earliest, ann.latest, ann.start) == (
@@ -82,11 +91,29 @@ def test_each_row_gets_the_window_of_its_day(game):
         datetime(2026, 10, 29, 16, 49), datetime(2026, 10, 29, 16, 50), datetime(2026, 10, 29, 16, 49, 30))
 
 
-def test_a_changed_logger_interval_is_flagged(game, monkeypatch, caplog):
-    game.row(at(10), 1, "LEADER_A")
-    monkeypatch.setattr(turn_logger, "POLL_S", 120)
-    game.compute()
-    assert "POLL_CHANGES ends at 60 s" in caplog.text
+def test_a_row_carries_its_own_window(game):
+    # Rows from before poll_s went by the date; the 10-second rows after them by what they say.
+    game.legacy_row(datetime(2026, 11, 3, 14, 0), 17, "LEADER_A")
+    game.row(datetime(2026, 11, 3, 14, 30, 10), 17, "LEADER_B", poll_s=10)
+    game.row(datetime(2026, 11, 3, 14, 31, 40), 17, "LEADER_C", poll_s=10)
+    seq, _ = game.compute(turn_times.poll_s_at)
+    ann, bob, cy = seq
+    assert (ann.poll_s, bob.poll_s, cy.poll_s) == (60, 10, 10)
+    assert (ann.earliest, ann.start) == (datetime(2026, 11, 3, 13, 59), datetime(2026, 11, 3, 13, 59, 30))
+    assert (bob.earliest, bob.start) == (datetime(2026, 11, 3, 14, 30), datetime(2026, 11, 3, 14, 30, 5))
+    assert turn_times.minutes(bob, cy.start) == 1.5
+
+
+def test_the_record_writes_its_interval(game):
+    game.row(at(10), 1, "LEADER_A", poll_s=10)
+    game.legacy_row(at(10, 5), 1, "LEADER_B")
+    assert [r.poll_s for r in turn_logger.read_records(game.log_path)] == [10, None]
+
+
+def test_hms():
+    assert turn_times.hms(4 + 22 / 60) == "4m 22s"
+    assert turn_times.hms(95.4) == "1h 35m 24s"
+    assert turn_times.hms(0.2) == "0m 12s"
 
 
 def test_a_row_places_the_start_half_a_poll_before_it(game):

@@ -272,3 +272,83 @@ class TestPoll:
             assert self._poll(log, saves) is not None
         assert "could not see that turn 6 has a save" in caplog.text
         assert turn_logger.read_records(log)  # the turn was logged all the same
+
+
+HELDI_6 = (6, "LEADER_GITARJA", "Heldi")
+
+
+class TestTurnLines:
+    """Rows from the bridge mod's turn lines in Lua.log, and the loop that reads them."""
+
+    def test_a_turn_line_gives_an_exact_row(self, tmp_path, game_log):
+        log = tmp_path / "turn_log.jsonl"
+        game_log.turn_line(_at(0, 10, 5), 6, "LEADER_GITARJA", "Heldi", slot=6)
+        assert turn_logger.log_turn_lines(turn_logger.turn_watch.default().read(), log)
+        (row,) = turn_logger.read_records(log)
+        assert (row.at, row.key, row.poll_s) == (_at(0, 10, 5), HELDI_6, 0)
+
+    def test_lines_the_log_already_covers_are_passed_over(self, tmp_path, game_log):
+        log = tmp_path / "turn_log.jsonl"
+        turn_logger.record(6, "LEADER_GITARJA", "Heldi", _at(0, 10, 5), log, poll_s=0)
+        game_log.turn_line(_at(0, 9), 6, "LEADER_JULIUS_CAESAR", "Cameron")  # before the last row
+        game_log.turn_line(_at(0, 10, 5), 6, "LEADER_GITARJA", "Heldi")  # that row
+        game_log.turn_line(_at(0, 10, 30), 6, "LEADER_GITARJA", "Heldi", why="load")  # a reload of it
+        game_log.turn_line(_at(0, 11), 6, "LEADER_GENGHIS_KHAN", "Randy")  # one the logger missed
+        assert turn_logger.log_turn_lines(turn_logger.turn_watch.default().read(), log)
+        assert [(r.at, r.player) for r in turn_logger.read_records(log)] == [(_at(0, 10, 5), "Heldi"), (_at(0, 11), "Randy")]
+
+    def test_a_poll_takes_the_time_of_the_turns_line(self, tmp_path, monkeypatch, game_log):
+        _, _, log = TestPoll()._game(tmp_path, monkeypatch)
+        line_at = datetime.now().replace(microsecond=0) - timedelta(seconds=40)
+        game_log.turn_line(line_at, 6, "LEADER_GITARJA", "Heldi")
+        asyncio.run(turn_logger.poll(log))
+        (row,) = turn_logger.read_records(log)
+        assert (row.at, row.poll_s) == (line_at, 0)
+
+    def test_a_poll_without_a_line_says_how_late_it_can_be(self, tmp_path, monkeypatch, game_log):
+        _, _, log = TestPoll()._game(tmp_path, monkeypatch)
+        game_log.turn_line(_at(0, 9), 6, "LEADER_JULIUS_CAESAR", "Cameron")  # the latest line is another turn's
+        asyncio.run(turn_logger.poll(log))
+        asyncio.run(turn_logger.poll(log, poll_s=turn_logger.SCREEN_POLL_S))
+        (row,) = turn_logger.read_records(log)
+        assert row.key == HELDI_6 and row.poll_s == turn_logger.POLL_S
+
+    def test_a_turn_line_sets_off_a_save_check_at_once(self, tmp_path, monkeypatch, game_log):
+        conn, saves, log = TestPoll()._game(tmp_path, monkeypatch)
+        watch = turn_logger.turn_watch.default()
+        next_poll = turn_logger.tick(watch, 0.0, log, saves, now=100.0)  # the startup poll
+        assert next_poll == 100.0 + turn_logger.POLL_S and conn.saves_sent() == ["GITARJA 6 3600 BC MCP"]
+        asked = len(conn.sent)
+        _save_file(saves, "GITARJA 6 3600 BC MCP", datetime.now() - timedelta(hours=2))  # a round ago, really
+        assert turn_logger.tick(watch, next_poll, log, saves, now=101.0) == next_poll
+        assert len(conn.sent) == asked  # nothing new, no poll due: the game is not asked
+        game_log.turn_line(datetime.now().replace(microsecond=0), 7, "LEADER_GITARJA", "Heldi")
+        conn.replies[0] = ("HS|", ["HS|7|3|LEADER_GITARJA|Heldi|true|true|true|true|true|true|false"])
+        conn.replies[1] = ("NAME|", ["NAME|GITARJA 7 3560 BC"])
+        assert turn_logger.tick(watch, next_poll, log, saves, now=102.0) == 102.0 + turn_logger.POLL_S
+        assert [(r.key, r.poll_s) for r in turn_logger.read_records(log)][-1] == ((7, "LEADER_GITARJA", "Heldi"), 0)
+        assert conn.saves_sent()[-1] == "GITARJA 7 3560 BC MCP"
+
+    def test_the_games_own_screen_line_sets_off_a_poll_too(self, tmp_path, monkeypatch, game_log):
+        _, saves, log = TestPoll()._game(tmp_path, monkeypatch)
+        watch = turn_logger.turn_watch.default()
+        turn_logger.record(6, "LEADER_JULIUS_CAESAR", "Cameron", _at(0, 9), log, poll_s=0)
+        game_log.screen_line(6)  # no turn line: a bridge mod from before them
+        turn_logger.tick(watch, 1e9, log, saves, now=0.0)
+        assert [(r.key, r.poll_s) for r in turn_logger.read_records(log)][-1] == (HELDI_6, turn_logger.SCREEN_POLL_S)
+
+    def test_after_an_exact_row_only_the_autosave_may_come_first(self, tmp_path):
+        # Cameron took 30 seconds, so his own save is newer than SAVE_LOOKBACK_S before Heldi's turn.
+        previous = turn_logger.TurnRecord(_at(0, 10, 4) + timedelta(seconds=30), 6, "LEADER_JULIUS_CAESAR", "Cameron", 0)
+        first = turn_logger.TurnRecord(_at(0, 10, 5), 6, "LEADER_GITARJA", "Heldi", poll_s=0)
+        cameron = _save_file(tmp_path, "JULIUS CAESAR 6 3600 BC MCP", _at(0, 10, 4) + timedelta(seconds=31))
+        assert turn_logger.save_of_turn(first, previous, "GITARJA 6 3600 BC", [cameron]) is None
+        autosave = _save_file(tmp_path / "auto", "AutoSave_0006", _at(0, 10, 4) + timedelta(seconds=50))
+        assert turn_logger.save_of_turn(first, previous, "GITARJA 6 3600 BC", [cameron, autosave]) == autosave
+
+    def test_a_row_from_a_long_poll_counts_saves_from_its_whole_window(self, tmp_path):
+        first = turn_logger.TurnRecord(_at(0, 10, 5), 6, "LEADER_GITARJA", "Heldi", poll_s=turn_logger.POLL_S)
+        f = _save_file(tmp_path, "AutoSave_0006", _at(0, 9, 55))  # ten minutes before the row
+        assert turn_logger.save_of_turn(first, None, "GITARJA 6 3600 BC", [f]) == f
+        exact = turn_logger.TurnRecord(_at(0, 10, 5), 6, "LEADER_GITARJA", "Heldi", poll_s=0)
+        assert turn_logger.save_of_turn(exact, None, "", [f]) is None

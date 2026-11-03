@@ -56,6 +56,25 @@ class TestHelpers:
         log.write_bytes(b"fresh\n")
         assert tail.read_lines() == ["fresh"]
 
+    def test_log_tail_notices_a_new_log_already_longer_than_the_old(self, tmp_path):
+        log = tmp_path / "Lua.log"
+        log.write_bytes(b"old 1\nold 2\n")
+        tail = bridge._LogTail(log)
+        assert tail.read_lines() == ["old 1", "old 2"]
+        log.write_bytes(b"new launch line 1\nnew launch line 2\n")  # restarted, and written past the old end
+        assert tail.read_lines() == ["new launch line 1", "new launch line 2"]
+        with open(log, "ab") as f:
+            f.write(b"more\n")
+        assert tail.read_lines() == ["more"]
+
+    def test_log_tail_seek_end_remembers_where_it_stood(self, tmp_path):
+        log = tmp_path / "Lua.log"
+        log.write_bytes(b"x" * 200 + b"\n")
+        tail = bridge._LogTail(log)
+        tail.seek_end()
+        log.write_bytes(b"y" * 300 + b"\n")  # restarted while nobody read
+        assert tail.read_lines() == ["y" * 300]
+
     def test_mod_paths(self, tmp_path):
         assert bridge.installed_mod_dir(tmp_path) == tmp_path / "MCPBridge"
         assert not bridge.is_mod_installed(tmp_path)

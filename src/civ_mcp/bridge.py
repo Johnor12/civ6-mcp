@@ -135,37 +135,53 @@ def install_mod(mods_dir: Path | None = None) -> Path:
 
 
 class _LogTail:
-    """Incremental reader for Lua.log that survives truncation on game restart."""
+    """Incremental reader for Lua.log that survives the game starting the log over on launch.
+
+    The game empties Lua.log when it starts. A log shorter than the read
+    position is plainly a new one; a new log that has already grown past
+    it is caught by the last bytes read, which are no longer where they
+    were. Either way the new log is read from the top.
+    """
+
+    MARK = 64  # bytes before the read position that must still be there
 
     def __init__(self, path: Path):
         self.path = path
         self._pos = 0
         self._buf = b""
+        self._mark = b""  # the MARK bytes before _pos, as last read
 
     def seek_end(self) -> None:
-        try:
-            self._pos = self.path.stat().st_size
-        except OSError:
-            self._pos = 0
         self._buf = b""
+        try:
+            with open(self.path, "rb") as f:
+                self._pos = f.seek(0, os.SEEK_END)
+                f.seek(max(0, self._pos - self.MARK))
+                self._mark = f.read(self._pos - f.tell())
+        except OSError:
+            self._pos, self._mark = 0, b""
 
     def read_lines(self) -> list[str]:
         try:
             size = self.path.stat().st_size
         except OSError:
             return []
-        if size < self._pos:  # the game truncates the log on launch
-            self._pos = 0
-            self._buf = b""
+        if size < self._pos:  # the game started the log over
+            self._pos, self._buf, self._mark = 0, b"", b""
         if size == self._pos:
             return []
         try:
             with open(self.path, "rb") as f:
-                f.seek(self._pos)
+                start = self._pos - len(self._mark)
+                f.seek(start)
+                if f.read(len(self._mark)) != self._mark:  # started over, and already longer
+                    self._pos, self._buf, self._mark = 0, b"", b""
+                    f.seek(0)
                 chunk = f.read(size - self._pos)
         except OSError:
             return []
         self._pos += len(chunk)
+        self._mark = (self._mark + chunk)[-self.MARK:]
         parts = (self._buf + chunk).split(b"\n")
         self._buf = parts.pop()  # incomplete last line
         return [p.rstrip(b"\r").decode("utf-8", errors="replace") for p in parts]

@@ -13,7 +13,7 @@
 -- The server tails Lua.log for these lines.
 -- ===========================================================================
 
-MCPB_VERSION = 2
+MCPB_VERSION = 3 -- 3: the InGame context prints turn lines (MCPBridge_InGame.lua)
 local POLL_SECONDS = 0.2
 local MAX_LINE = 1800 -- Lua.log truncates longer lines
 
