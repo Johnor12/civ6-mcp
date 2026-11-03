@@ -248,16 +248,38 @@ def test_report_message_has_yesterday_then_everything(game):
         f"*Turn times* in workday hours ({turn_logger.WORKDAY}), slowest first.",
         "",
         "*Yesterday (Wed 28 Oct): 3 turns, 23m average*",
-        "1. Cy: 30m",
-        "2. Bob: 20m",
-        "3. Di: 20m",
+        "1. Cy: 30m (1 turn)",
+        "2. Bob: 20m (1 turn)",
+        "3. Di: 20m (1 turn)",
         "No turn: Ann",
         "",
         "*Since Tue 27 Oct: 4 turns, 20m average*",
-        "1. Cy: 30m",
-        "2. Bob: 20m",
-        "3. Di: 20m",
-        "4. Ann: 10m",
+        "1. Cy: 30m (1 turn)",
+        "2. Bob: 20m (1 turn)",
+        "3. Di: 20m (1 turn)",
+        "4. Ann: 10m (1 turn)",
+    ]
+
+
+def test_report_counts_each_players_turns(game):
+    _week(game)
+    game.row(at(24 + 10, 15), 2, "LEADER_B")  # Ann's turn 2: 15 min on Wednesday
+    game.row(at(24 + 10, 20), 2, "LEADER_C")  # Bob's turn 2: 5 min on Wednesday; Cy's turn 2 in progress
+    seq, _ = game.compute()
+    lines = turn_report.message(seq, today=date(2026, 10, 29)).splitlines()
+    assert lines[2:7] == [
+        "*Yesterday (Wed 28 Oct): 5 turns, 18m average*",
+        "1. Cy: 30m (1 turn)",
+        "2. Di: 20m (1 turn)",
+        "3. Ann: 15m (1 turn)",
+        "4. Bob: 12m (2 turns)",  # 20 min, then 5 min
+    ]
+    assert lines[8:] == [
+        "*Since Tue 27 Oct: 6 turns, 17m average*",
+        "1. Cy: 30m (1 turn)",
+        "2. Di: 20m (1 turn)",
+        "3. Ann: 12m (2 turns)",  # 10 min, then 15 min
+        "4. Bob: 12m (2 turns)",
     ]
 
 

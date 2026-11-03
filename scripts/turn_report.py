@@ -16,9 +16,10 @@ The figures come from scripts/turn_times.py: the turn log plus the hotseat
 saves, each turn's minutes of workday time (turn_logger.WORKDAY, what the
 bot's turn limit counts). The post ranks players slowest first twice: over
 the previous workday's turns (how many were taken, the average turn, and
-each player's average that day) and over every turn since the log began
-(again with the turn count and the average turn). Nothing is written
-anywhere; the turn log is the history. A workday on which the
+each player's average and number of turns that day) and over every turn
+since the log began (again with the turn count, the average turn and each
+player's average and number of turns). Nothing is written anywhere; the
+turn log is the history. A workday on which the
 process is not up at POST_AT gets no report. scripts/start.py runs this
 next to the turn logger, the announcer and the bot. The bot token comes
 from the repo's .env and the bot must be a member of the channel.
@@ -54,21 +55,30 @@ def previous_workday(day: date) -> date:
     return day
 
 
+def _turns(n: int) -> str:
+    return f"{n} turn" + ("s" if n != 1 else "")
+
+
 def _ranking(averages: list[turn_times.PlayerAverage]) -> list[str]:
-    return [f"{rank}. {a.player}: {turn_times.hm(a.mean_minutes)}" for rank, a in enumerate(averages, 1)]
+    """'1. Cy: 30m (3 turns)': each player's average turn and how many turns it covers."""
+    return [
+        f"{rank}. {a.player}: {turn_times.hm(a.mean_minutes)} ({_turns(a.turns)})"
+        for rank, a in enumerate(averages, 1)
+    ]
 
 
 def _count(done: list[tuple[turn_times.PlayerTurn, datetime]]) -> str:
     """'3 turns, 23m average'; '0 turns' when there are none."""
-    turns = f"{len(done)} turn" + ("s" if len(done) != 1 else "")
+    turns = _turns(len(done))
     return f"{turns}, {turn_times.hm(turn_times.mean_minutes(done))} average" if done else turns
 
 
 def message(seq: list[turn_times.PlayerTurn], today: date | None = None) -> str:
     """The post: the previous workday's turns and everyone's averages, then the same since the log began.
 
-    Each heading gives the turn count and the average turn. Empty while no
-    turn has finished.
+    Each heading gives the turn count and the average turn; each ranking
+    line gives that player's average and how many turns it covers. Empty
+    while no turn has finished.
     """
     done = turn_times.finished(seq)
     if not done:
