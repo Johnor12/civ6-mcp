@@ -15,8 +15,9 @@
 The figures come from scripts/turn_times.py: the turn log plus the hotseat
 saves, each turn's minutes of workday time (turn_logger.WORKDAY, what the
 bot's turn limit counts). The post ranks players slowest first twice: over
-the previous workday's turns (how many were taken, the average turn, and
-each player's average and number of turns that day) and over every turn
+the previous workday's turns (how many were taken, against the record for
+most turns on one workday, the average turn, and each player's average
+and number of turns that day) and over every turn
 since the log began (again with the turn count, the average turn and each
 player's average and number of turns). Beside each average is the time to
 take the turn, from Start Turn to its end, over the turns that have one
@@ -100,13 +101,37 @@ def _claude(done: list[tuple[turn_times.PlayerTurn, datetime]]) -> list[str]:
     return [f"Claude took {_turns(len(claude))} ({whose})" + (f", play time: {turn_times.hms(mean)}" if mean is not None else "")]
 
 
+def _record(seq: list[turn_times.PlayerTurn], day: date, count: int) -> list[str]:
+    """`count` turns taken on `day` against the most taken on any earlier workday; nothing without one.
+
+    '36 turns taken, a new record! Previous record: 30 (Thu 29 Oct)',
+    '30 turns taken, tying the record (Thu 29 Oct)' or
+    '26 turns taken. Record: 36 (Fri 30 Oct)'. The record's day is the
+    first that reached it. Weekend days are left out: the report never
+    covers one, so it could never announce their record.
+    """
+    earlier = {d: n for d, n in turn_times.turns_per_day(seq).items() if d < day and d.weekday() < 5}
+    if not earlier:
+        return []
+    best = max(earlier.values())
+    when = f"{min(d for d, n in earlier.items() if n == best):%a %d %b}"
+    taken = f"{_turns(count)} taken"
+    if count > best:
+        return [f"{taken}, a new record! Previous record: {best} ({when})"]
+    if count == best:
+        return [f"{taken}, tying the record ({when})"]
+    return [f"{taken}. Record: {best} ({when})"]
+
+
 def message(seq: list[turn_times.PlayerTurn], today: date | None = None) -> str:
     """The post: the previous workday's turns and everyone's averages, then the same since the log began.
 
     Each heading gives the turn count, the average turn and the average
     play time; each ranking line gives that player's average, how many
-    turns it covers and their play time. A line for the turns Claude
-    took follows each ranking. Empty while no turn has finished.
+    turns it covers and their play time. Under the previous workday's
+    heading, its turn count against the record (_record); a line for the
+    turns Claude took follows each ranking. Empty while no turn has
+    finished.
     """
     done = turn_times.finished(seq)
     if not done:
@@ -119,7 +144,7 @@ def message(seq: list[turn_times.PlayerTurn], today: date | None = None) -> str:
     head = f"*Turn times* in workday hours ({WORKDAY}), slowest first."
     if any(pt.taken is not None for pt, _ in done):
         head += " Play time: from pressing Start Turn to the end of the turn."
-    lines = [head, "", f"*{label}: {_count(yesterday)}*"]
+    lines = [head, "", f"*{label}: {_count(yesterday)}*", *_record(seq, day, len(yesterday))]
     if yesterday:
         lines += _ranking(turn_times.player_averages(yesterday)) + _claude(yesterday)
         played = {pt.player for pt, _ in yesterday}

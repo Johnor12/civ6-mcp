@@ -282,6 +282,7 @@ def test_report_message_has_yesterday_then_everything(game):
         f"*Turn times* in workday hours ({turn_logger.WORKDAY}), slowest first.",
         "",
         "*Yesterday (Wed 28 Oct): 3 turns, 23m 20s average*",
+        "3 turns taken, a new record! Previous record: 1 (Tue 27 Oct)",
         "1. Cy: 30m 00s (1 turn)",
         "2. Bob: 20m 00s (1 turn)",
         "3. Di: 20m 00s (1 turn)",
@@ -301,14 +302,15 @@ def test_report_counts_each_players_turns(game):
     game.row(at(24 + 10, 20), 2, "LEADER_C")  # Bob's turn 2: 5 min on Wednesday; Cy's turn 2 in progress
     seq, _ = game.compute()
     lines = turn_report.message(seq, today=date(2026, 10, 29)).splitlines()
-    assert lines[2:7] == [
+    assert lines[2:8] == [
         "*Yesterday (Wed 28 Oct): 5 turns, 18m 00s average*",
+        "5 turns taken, a new record! Previous record: 1 (Tue 27 Oct)",
         "1. Cy: 30m 00s (1 turn)",
         "2. Di: 20m 00s (1 turn)",
         "3. Ann: 15m 00s (1 turn)",
         "4. Bob: 12m 30s (2 turns)",  # 20 min, then 5 min
     ]
-    assert lines[8:] == [
+    assert lines[9:] == [
         "*Since Tue 27 Oct: 6 turns, 16m 40s average*",
         "1. Cy: 30m 00s (1 turn)",
         "2. Di: 20m 00s (1 turn)",
@@ -335,8 +337,31 @@ def test_monday_report_covers_friday(game):
     _week(game)
     seq, _ = game.compute()
     lines = turn_report.message(seq, today=date(2026, 11, 2)).splitlines()  # a Monday
-    assert lines[2] == "*Friday 30 Oct: 0 turns*"
-    assert lines[3:5] == ["", "*Since Tue 27 Oct: 4 turns, 20m 00s average*"]
+    assert lines[2:4] == ["*Friday 30 Oct: 0 turns*", "0 turns taken. Record: 3 (Wed 28 Oct)"]
+    assert lines[4:6] == ["", "*Since Tue 27 Oct: 4 turns, 20m 00s average*"]
+
+
+def test_report_holds_the_day_against_the_record(game):
+    # Turns ending on Tue 27: 2, Wed 28: 3, Thu 29: 3, Sat 31: 5, Mon 02: 1; the last turn is in progress.
+    k = 0
+    for days, rows in ((0, 3), (1, 3), (2, 3), (4, 5), (6, 1)):
+        for i in range(rows):
+            game.row(at(24 * days + 10, 10 * i), 1 + k // 4, SEATS[k % 4][0], poll_s=0)
+            k += 1
+    seq, _ = game.compute()
+    assert turn_times.turns_per_day(seq) == {
+        date(2026, 10, 27): 2, date(2026, 10, 28): 3, date(2026, 10, 29): 3,
+        date(2026, 10, 31): 5, date(2026, 11, 2): 1,
+    }
+
+    def record_line(today: date) -> str:
+        return turn_report.message(seq, today=today).splitlines()[3]
+
+    assert record_line(date(2026, 10, 28)).startswith("1. ")  # the first day has no record to hold
+    assert record_line(date(2026, 10, 29)) == "3 turns taken, a new record! Previous record: 2 (Tue 27 Oct)"
+    assert record_line(date(2026, 10, 30)) == "3 turns taken, tying the record (Wed 28 Oct)"
+    # Saturday's 5 never counts: the report covers workdays only.
+    assert record_line(date(2026, 11, 3)) == "1 turn taken. Record: 3 (Wed 28 Oct)"
 
 
 def test_previous_workday():

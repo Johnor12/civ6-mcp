@@ -343,6 +343,14 @@ def ended_on(seq: list[PlayerTurn], day: date) -> list[tuple[PlayerTurn, datetim
     return [(pt, end) for pt, end in finished(seq) if end.date() == day]
 
 
+def turns_per_day(seq: list[PlayerTurn]) -> dict[date, int]:
+    """How many player-turns ended on each day that had one, by the day of their end (as ended_on counts them)."""
+    counts: dict[date, int] = {}
+    for _, end in finished(seq):
+        counts[end.date()] = counts.get(end.date(), 0) + 1
+    return counts
+
+
 def ended_after(seq: list[PlayerTurn], when: datetime) -> list[tuple[PlayerTurn, datetime]]:
     """The finished player-turns that ended after `when`."""
     return [(pt, end) for pt, end in finished(seq) if end > when]

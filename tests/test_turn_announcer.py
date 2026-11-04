@@ -100,7 +100,7 @@ class TestTurnStart:
     def test_new_turn_pings_the_player_once(self, slack):
         _turn(_at(0, 10))
         assert _check(slack, _at(0, 10, 1))
-        assert slack.posts == [f"<@{RANDY}> it's your turn (turn 3)."]  # the log begins here: no finished turn to list
+        assert slack.posts == [f"<@{RANDY}> it's your turn (today's turns: 0)."]  # the log begins here: no finished turn
         calls = slack.history_calls
         assert not _check(slack, _at(0, 10, 6))
         assert slack.history_calls == calls  # remembered, the channel is not read again
@@ -131,7 +131,7 @@ class TestTurnStart:
         _turn(_at(0, 10, 30))  # Randy, the next seat
         assert _check(slack, _at(0, 10, 30))
         # Heldi's turn: half a poll before her row to half a poll before Randy's.
-        assert slack.posts[-1] == f"<@{RANDY}> it's your turn (turn 3). Since my last post: Heldi 30m 00s."
+        assert slack.posts[-1] == f"<@{RANDY}> it's your turn (today's turns: 1). Since my last post: Heldi 30m 00s."
 
     def test_a_player_not_in_players_is_skipped(self, slack):
         _turn(_at(0, 10), player="Player 1")
@@ -154,12 +154,12 @@ class TestRecentTurns:
         _turn(_at(0, 10, 50), player="John", leader="LEADER_LIME_THULE_DAVE")
         assert _check(slack, _at(0, 10, 51))
         assert slack.posts[-1] == (
-            f"<@{JOHN}> it's your turn (turn 3). Since my last post: Heldi 30m 00s, Randy 10m 00s, Hunter 10m 00s."
+            f"<@{JOHN}> it's your turn (today's turns: 3). Since my last post: Heldi 30m 00s, Randy 10m 00s, Hunter 10m 00s."
         )
         # The next post starts over from this one.
         _turn(_at(0, 11), player="Aaron", leader="LEADER_CLEOPATRA", turn=4)
         assert _check(slack, _at(0, 11, 1))
-        assert slack.posts[-1] == f"<@{AARON}> it's your turn (turn 4). Since my last post: John 10m 00s."
+        assert slack.posts[-1] == f"<@{AARON}> it's your turn (today's turns: 4). Since my last post: John 10m 00s."
 
     def test_the_list_gives_each_turns_play_time(self, slack):
         _turn(_at(0, 10), player="Heldi", leader="LEADER_GITARJA")
@@ -172,7 +172,7 @@ class TestRecentTurns:
         _turn(_at(0, 11, 34), player="Hunter", leader="LEADER_AMANITORE")
         assert _check(slack, _at(0, 11, 35))
         assert slack.posts[-1] == (
-            f"<@{HUNTER}> it's your turn (turn 3). Since my last post: "
+            f"<@{HUNTER}> it's your turn (today's turns: 2). Since my last post: "
             "Heldi 30m 00s (play time: 10m 00s), Randy 1h 04m 00s (Claude, play time: 4m 00s)."
         )
 
@@ -185,16 +185,17 @@ class TestRecentTurns:
             slack.say(at, f"<@{who}>")
         _turn(_at(1, 10, 50), player="John", leader="LEADER_LIME_THULE_DAVE")
         assert _check(slack, _at(1, 10, 51))
+        # Cameron's turn ended on Monday: listed (the last day), but not one of today's turns.
         assert slack.posts == [
-            f"<@{JOHN}> it's your turn (turn 3). Since my last post: Heldi 8h 30m 00s, Randy 10m 00s, Hunter 10m 00s."
+            f"<@{JOHN}> it's your turn (today's turns: 3). Since my last post: Heldi 8h 30m 00s, Randy 10m 00s, Hunter 10m 00s."
         ]
 
     def test_a_seat_turn_times_does_not_know_does_not_stop_the_ping(self, slack, caplog):
         _turn(_at(0, 10), player="Heldi", leader="LEADER_NOBODY")
         _turn(_at(0, 10, 30))
         assert _check(slack, _at(0, 10, 31))
-        assert slack.posts == [f"<@{RANDY}> it's your turn (turn 3)."]
-        assert "turns since the last post" in caplog.text
+        assert slack.posts == [f"<@{RANDY}> it's your turn."]  # without today's turns or the list
+        assert "could not work out the finished turns" in caplog.text
 
 
 class TestReminders:
@@ -203,9 +204,10 @@ class TestReminders:
         assert _check(slack, _at(0, 10, 1))
         assert not _check(slack, _at(0, 10, 25))
         assert _check(slack, _at(0, 10, 30))
-        assert slack.posts[-1].startswith(f"<@{RANDY}> reminder: your turn (Genghis Khan, turn 3) has been waiting 30m")
+        assert slack.posts[-1].startswith(f"<@{RANDY}> reminder: your turn (today's turns: 0) has been waiting 30m")
         assert not _check(slack, _at(0, 10, 35))
         assert _check(slack, _at(0, 11))
+        assert slack.posts[-1].startswith(f"<@{RANDY}> your turn (today's turns: 0) has been waiting 1h")
         assert "any other player can now have it played for you through this app" in slack.posts[-1]
         assert not _check(slack, _at(0, 13))
         assert len(slack.posts) == 3

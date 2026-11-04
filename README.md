@@ -182,8 +182,11 @@ and what the viewer can do about it), and an invite to
   time, plus its play time (Start Turn to the end of the turn, marked
   when Claude took it) where the taken log has one; a reminder after 30 minutes of workday time; and after 1 hour a last
   one saying any other player can now have the turn played through the
-  bot. The bot calls it right after each of its
-  runs, so a turn the bot ended reaches the next player at once; a turn
+  bot. Each message gives today's turns (how many player-turns have ended
+  today, as the daily report counts them against the record) so the
+  channel can see how close the day is to a new one. The bot calls it
+  right after each of its runs, so a turn the bot ended reaches the next
+  player at once; a turn
   ended at the PC is noticed within a minute. The bot itself only answers
   messages.
 - **Turn report.** `scripts/turn_report.py` posts in

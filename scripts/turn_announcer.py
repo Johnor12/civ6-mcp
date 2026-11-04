@@ -20,6 +20,11 @@ is one it has not dealt with yet, reads the channel back to when it fell
 due. Slack is called a few times per message, never once a second; after a
 failure it waits RETRY_S before trying again.
 
+Every message carries today's turns, how many player-turns have ended
+today, counted as the daily report counts a day's turns against the record
+(turn_times.turns_per_day), so the channel can see how close the day is to
+a new one.
+
 - When the turn begins: "it's your turn", unless someone has @'d the player
   in the channel since. Players ping the next one by hand when they finish,
   so a mention by anyone counts. The message ends with every turn finished
@@ -78,20 +83,21 @@ LOCK_PATH = REPO_ROOT / "scripts" / "data" / "turn_announcer.lock"
 SAVES_DIR: Path | None = None  # hotseat save folder for turn_times; None is the game's
 
 # (workday seconds into the turn, message); the last one due is sent.
-# {recent} is the finished turns since the bot's last post (see recent_turns).
+# {today} is today's turn count (see todays_turns); {recent} is the finished
+# turns since the bot's last post (see recent_turns).
 STAGES = (
-    (0, "{mention} it's your turn (turn {turn}).{recent}"),
+    (0, "{mention} it's your turn{today}.{recent}"),
     (
         REMINDER_S,
         (
-            "{mention} reminder: your turn ({leader}, turn {turn}) has been waiting {waited} of workday time "
+            "{mention} reminder: your turn{today} has been waiting {waited} of workday time "
             "({workday}). After {limit} any other player can have me play it for you."
         ),
     ),
     (
         TURN_LIMIT_S,
         (
-            "{mention} your turn ({leader}, turn {turn}) has been waiting {limit} of workday time, so any other "
+            "{mention} your turn{today} has been waiting {limit} of workday time, so any other "
             "player can now have it played for you through this app. DM me your note first if you want a say in it."
         ),
     ),
@@ -147,11 +153,11 @@ def _announce(client, now: datetime) -> bool:
     posted = False
     with posting_lock():
         if not mentioned(client, player.slack_id, since, from_bot):
+            seq = player_turns()
             text = template.format(
                 mention=f"<@{player.slack_id}>",
-                leader=rec.leader_display,
-                turn=rec.turn,
-                recent=recent_turns(client, now) if stage == 0 else "",
+                today=todays_turns(seq, now),
+                recent=recent_turns(client, seq, now) if stage == 0 else "",
                 waited=duration(REMINDER_S),
                 limit=duration(TURN_LIMIT_S),
                 workday=WORKDAY,
@@ -189,20 +195,41 @@ def _recent(pt: turn_times.PlayerTurn, end: datetime) -> str:
     return text
 
 
-def recent_turns(client, now: datetime) -> str:
+def player_turns() -> list[turn_times.PlayerTurn] | None:
+    """The player-turns from turn_times, the daily report's figures, so the two agree; None when they cannot be worked out.
+
+    Never raises: a failure (a leader not in turn_times.SEATS) is logged and
+    the message goes out without today's turns and the list.
+    """
+    try:
+        seq, _ = turn_times.compute(saves_dir=SAVES_DIR)
+    except Exception:
+        log.exception("could not work out the finished turns; the message goes out without them")
+        return None
+    return seq
+
+
+def todays_turns(seq: list[turn_times.PlayerTurn] | None, now: datetime) -> str:
+    """' (today's turns: 12)': the player-turns that ended on `now`'s day, as the daily report counts them; '' without seq."""
+    if seq is None:
+        return ""
+    return f" (today's turns: {turn_times.turns_per_day(seq).get(now.date(), 0)})"
+
+
+def recent_turns(client, seq: list[turn_times.PlayerTurn] | None, now: datetime) -> str:
     """' Since my last post: Heldi 30m 00s (play time: 10m 00s), Randy 10m 12s.' for the turns finished since; '' for none.
 
     The turns and their minutes of workday time (each listed as _recent
-    gives it) come from turn_times, the daily report's figures, so the two
-    agree. The bot's last post is looked
-    for LOOKBACK_S back; without one, the turns of that stretch are listed.
-    Never raises: a failure is logged and the message goes out without the
-    list.
+    gives it) come from `seq` (see player_turns); '' without it. The bot's
+    last post is looked for LOOKBACK_S back; without one, the turns of that
+    stretch are listed. Never raises: a failure is logged and the message
+    goes out without the list.
     """
+    if seq is None:
+        return ""
     try:
         floor = now - timedelta(seconds=LOOKBACK_S)
         since = last_own_post(client, floor) or floor
-        seq, _ = turn_times.compute(saves_dir=SAVES_DIR)
         done = turn_times.ended_after(seq, since)
     except Exception:
         log.exception("could not work out the turns since the last post")
