@@ -60,17 +60,17 @@ def _turns(n: int) -> str:
 
 
 def _ranking(averages: list[turn_times.PlayerAverage]) -> list[str]:
-    """'1. Cy: 30m (3 turns)': each player's average turn and how many turns it covers."""
+    """'1. Cy: 30m 00s (3 turns)': each player's average turn and how many turns it covers."""
     return [
-        f"{rank}. {a.player}: {turn_times.hm(a.mean_minutes)} ({_turns(a.turns)})"
+        f"{rank}. {a.player}: {turn_times.hms(a.mean_minutes)} ({_turns(a.turns)})"
         for rank, a in enumerate(averages, 1)
     ]
 
 
 def _count(done: list[tuple[turn_times.PlayerTurn, datetime]]) -> str:
-    """'3 turns, 23m average'; '0 turns' when there are none."""
+    """'3 turns, 23m 20s average'; '0 turns' when there are none."""
     turns = _turns(len(done))
-    return f"{turns}, {turn_times.hm(turn_times.mean_minutes(done))} average" if done else turns
+    return f"{turns}, {turn_times.hms(turn_times.mean_minutes(done))} average" if done else turns
 
 
 def message(seq: list[turn_times.PlayerTurn], today: date | None = None) -> str:

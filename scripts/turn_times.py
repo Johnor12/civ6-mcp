@@ -352,12 +352,6 @@ def player_averages(done: list[tuple[PlayerTurn, datetime]]) -> list[PlayerAvera
     return out
 
 
-def hm(minutes: float) -> str:
-    """95.4 -> '1h 35m'."""
-    h, m = divmod(int(round(minutes)), 60)
-    return f"{h}h {m:02d}m" if h else f"{m}m"
-
-
 def hms(minutes: float) -> str:
     """4.37 -> '4m 22s', 95.4 -> '1h 35m 24s'."""
     h, rest = divmod(round(minutes * 60), 3600)

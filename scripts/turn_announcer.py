@@ -10,11 +10,15 @@
 
     uv run scripts/turn_announcer.py
 
-Every POLL_S it reads whose turn it is, and since when, from the turn log
-(scripts/data/turn_log.jsonl), which the turn logger keeps within a second
-of the game from the turn lines in Lua.log; it never asks the game itself.
-It works out which message the turn is due for, and reads the channel back
-to when that message fell due:
+Every second (POLL_S) it reads whose turn it is, and since when, from the
+turn log (scripts/data/turn_log.jsonl), which the turn logger keeps within a
+second of the game from the turn lines in Lua.log; it never asks the game
+itself. So a new turn is announced within about two seconds of its line in
+Lua.log, before the player who just finished usually gets to ping by hand.
+It works out which message the turn is due for and, only when that message
+is one it has not dealt with yet, reads the channel back to when it fell
+due. Slack is called a few times per message, never once a second; after a
+failure it waits RETRY_S before trying again.
 
 - When the turn begins: "it's your turn", unless someone has @'d the player
   in the channel since. Players ping the next one by hand when they finish,
@@ -63,7 +67,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 log = logging.getLogger("turn_announcer")
 
 CHANNEL = "C09AZ6CR7QE"  # #proj-diplomatic-relations
-POLL_S = 60
+POLL_S = 1  # how often the turn log is read; Slack is called only when a message falls due
+RETRY_S = 60  # after a failure (Slack down, rate-limited), how long before the next try
 REMINDER_S = 1800  # workday time before the first reminder
 LOOKBACK_S = 24 * 3600  # how far back the turn message looks for the bot's last post
 HAND_PING_S = 60  # a mention this long before the turn began counts as the hand ping
@@ -92,19 +97,28 @@ STAGES = (
 
 _sent: set[tuple] = set()  # (turn key, stage) known to be in the channel
 _bot_ids: tuple[str, str] | None = None  # the bot's user id and bot id
+_retry_at: datetime | None = None  # after a failure, no call before this
 
 
 def announce(client, now: datetime | None = None) -> bool:
     """Read whose turn it is from the turn log and post the message that turn is due for, unless it is in the channel.
 
     True when a message was posted. Never raises: a failure is logged and the
-    next call tries again.
+    first call RETRY_S or more later tries again, so a Slack outage is not
+    hit (or logged) once a second.
     """
-    try:
-        return _announce(client, now or datetime.now())
-    except Exception:
-        log.exception("announcing the turn failed")
+    global _retry_at
+    now = now or datetime.now()
+    if _retry_at is not None and now < _retry_at:
         return False
+    try:
+        posted = _announce(client, now)
+    except Exception:
+        log.exception("announcing the turn failed; trying again in %s", duration(RETRY_S))
+        _retry_at = now + timedelta(seconds=RETRY_S)
+        return False
+    _retry_at = None
+    return posted
 
 
 def _announce(client, now: datetime) -> bool:
@@ -165,7 +179,7 @@ def mentioned(client, slack_id: str, since: datetime, from_bot: bool) -> bool:
 
 
 def recent_turns(client, now: datetime) -> str:
-    """' Since my last post: Heldi 30m, Randy 10m.' for the turns finished since the bot last posted; '' for none.
+    """' Since my last post: Heldi 30m 00s, Randy 10m 12s.' for the turns finished since the bot last posted; '' for none.
 
     The turns and their minutes of workday time come from turn_times, the
     daily report's figures, so the two agree. The bot's last post is looked
@@ -184,7 +198,7 @@ def recent_turns(client, now: datetime) -> str:
     if not done:
         return ""
     return " Since my last post: " + ", ".join(
-        f"{pt.player} {turn_times.hm(turn_times.minutes(pt, end))}" for pt, end in done
+        f"{pt.player} {turn_times.hms(turn_times.minutes(pt, end))}" for pt, end in done
     ) + "."
 
 
@@ -240,8 +254,8 @@ def main() -> None:
         raise SystemExit(f"SLACK_BOT_TOKEN must be set in {REPO_ROOT / '.env'}")
     client = WebClient(token=token)
     log.info(
-        "checking every %d min; channel %s; reminders after %s and %s of workday time",
-        POLL_S // 60, CHANNEL, duration(REMINDER_S), duration(TURN_LIMIT_S),
+        "reading the turn log every %d s; channel %s; reminders after %s and %s of workday time",
+        POLL_S, CHANNEL, duration(REMINDER_S), duration(TURN_LIMIT_S),
     )
     while True:
         announce(client)

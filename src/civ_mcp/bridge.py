@@ -89,6 +89,11 @@ def hotseat_saves_dir() -> Path:
     return game_user_dir() / "Saves" / "Hotseat"
 
 
+def snapshots_dir() -> Path:
+    """Where the bridge mod saves the game each time the pause menu opens, out of the Load Game list's way."""
+    return game_user_dir() / "Snapshots"
+
+
 def default_lua_log() -> Path:
     override = os.environ.get("CIV_MCP_LUA_LOG")
     if override:
@@ -140,7 +145,8 @@ class _LogTail:
     The game empties Lua.log when it starts. A log shorter than the read
     position is plainly a new one; a new log that has already grown past
     it is caught by the last bytes read, which are no longer where they
-    were. Either way the new log is read from the top.
+    were. Either way the new log is read from the top, and `restarts`
+    counts it.
     """
 
     MARK = 64  # bytes before the read position that must still be there
@@ -150,6 +156,7 @@ class _LogTail:
         self._pos = 0
         self._buf = b""
         self._mark = b""  # the MARK bytes before _pos, as last read
+        self.restarts = 0  # times the game started the log over since this tail first read it
 
     def seek_end(self) -> None:
         self._buf = b""
@@ -168,6 +175,7 @@ class _LogTail:
             return []
         if size < self._pos:  # the game started the log over
             self._pos, self._buf, self._mark = 0, b"", b""
+            self.restarts += 1
         if size == self._pos:
             return []
         try:
@@ -176,6 +184,7 @@ class _LogTail:
                 f.seek(start)
                 if f.read(len(self._mark)) != self._mark:  # started over, and already longer
                     self._pos, self._buf, self._mark = 0, b"", b""
+                    self.restarts += 1
                     f.seek(0)
                 chunk = f.read(size - self._pos)
         except OSError:

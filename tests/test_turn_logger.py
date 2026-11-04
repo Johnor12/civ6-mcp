@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import re
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 import turn_logger  # noqa: E402
@@ -15,6 +18,14 @@ import turn_logger  # noqa: E402
 from civ_mcp import hotseat  # noqa: E402
 
 MONDAY = datetime(2026, 10, 26)
+
+
+@pytest.fixture(autouse=True)
+def snapshots(tmp_path, monkeypatch) -> Path:
+    """The bridge mod's snapshot folder, empty and the test's own, so no test reads the game's."""
+    folder = tmp_path / "Snapshots"
+    monkeypatch.setattr(turn_logger, "SNAPSHOTS_DIR", folder)
+    return folder
 
 
 def _at(day: int, hour: int, minute: int = 0) -> datetime:
@@ -352,3 +363,132 @@ class TestTurnLines:
         assert turn_logger.save_of_turn(first, None, "GITARJA 6 3600 BC", [f]) == f
         exact = turn_logger.TurnRecord(_at(0, 10, 5), 6, "LEADER_GITARJA", "Heldi", poll_s=0)
         assert turn_logger.save_of_turn(exact, None, "", [f]) is None
+
+
+class TestReloads:
+    """Rows in the reload log, beside the turn log, for every save loaded into the game."""
+
+    def _reload_rows(self, log):
+        path = turn_logger.reload_log_path(log)
+        return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+    def test_a_turn_replayed_from_its_start(self, tmp_path, game_log):
+        log = tmp_path / "turn_log.jsonl"
+        watch = turn_logger.turn_watch.default()
+        game_log.turn_line(_at(1, 16), 18, "LEADER_CLEOPATRA", "Aaron")
+        game_log.start_turn(0)
+        turn_logger.log_turn_lines(watch.read(), log)
+        game_log.relaunch()
+        game_log.load()
+        game_log.turn_line(_at(1, 17, 20), 18, "LEADER_CLEOPATRA", "Aaron")
+        assert turn_logger.log_turn_lines(watch.read(), log) is False  # the same turn: no turn row
+        assert turn_logger.log_reloads(watch.reloads, log) == 1
+        (row,) = self._reload_rows(log)
+        assert row == {
+            "at": _at(1, 17, 20).astimezone().isoformat(timespec="seconds"),
+            "turn": 18,
+            "leader": "LEADER_CLEOPATRA",
+            "player": "Aaron",
+            "relaunched": True,
+            "menu": True,
+            "mid_turn": False,
+            "had_started": True,
+            "turn_began": _at(1, 16).astimezone().isoformat(timespec="seconds"),
+            "snapshot": None,
+        }
+        assert turn_logger.reload_log_path(log) == tmp_path / "reload_log.jsonl"
+
+    def test_a_load_offered_again_is_written_once(self, tmp_path, game_log):
+        log = tmp_path / "turn_log.jsonl"
+        game_log.relaunch()
+        game_log.load()
+        game_log.turn_line(_at(1, 17, 20), 18, "LEADER_CLEOPATRA", "Aaron")
+        first = turn_logger.turn_watch.TurnWatch(game_log.path).read()
+        assert turn_logger.log_reloads(first, log) == 1
+        again = turn_logger.turn_watch.TurnWatch(game_log.path).read()  # the logger restarted
+        assert turn_logger.log_reloads(again, log) == 0
+        (row,) = self._reload_rows(log)
+        assert row["had_started"] is None and row["turn_began"] is None
+
+    def test_turn_began_is_from_before_the_load(self, tmp_path, game_log):
+        # A save of a turn the turn log never had: the row the load itself gives is not when it began.
+        log = tmp_path / "turn_log.jsonl"
+        watch = turn_logger.turn_watch.default()
+        game_log.load(menu=False)
+        game_log.turn_line(_at(1, 17, 20), 18, "LEADER_CLEOPATRA", "Aaron")
+        assert turn_logger.log_turn_lines(watch.read(), log)
+        turn_logger.log_reloads(watch.reloads, log)
+        (row,) = self._reload_rows(log)
+        assert row["turn_began"] is None and row["menu"] is False
+
+    def test_the_loop_writes_each_load_once(self, tmp_path, monkeypatch, game_log):
+        conn, saves, log = TestPoll()._game(tmp_path, monkeypatch)
+        watch = turn_logger.turn_watch.default()
+        game_log.load()  # the game's launch
+        game_log.turn_line(datetime.now().replace(microsecond=0) - timedelta(minutes=30), 6, "LEADER_GITARJA", "Heldi")
+        turn_logger.tick(watch, 0.0, log, saves, now=100.0)
+        assert [r["relaunched"] for r in self._reload_rows(log)] == [True]
+        game_log.start_turn(0)
+        turn_logger.tick(watch, 1e9, log, saves, now=101.0)
+        game_log.load()
+        game_log.turn_line(datetime.now().replace(microsecond=0), 6, "LEADER_GITARJA", "Heldi", why="load")
+        assert turn_logger.tick(watch, 1e9, log, saves, now=102.0) == 1e9  # the same turn: no row, no poll
+        _, row = self._reload_rows(log)
+        assert (row["player"], row["mid_turn"], row["had_started"], row["relaunched"]) == ("Heldi", True, True, False)
+        assert row["turn_began"] == turn_logger.read_records(log)[0].at.astimezone().isoformat(timespec="seconds")
+        assert watch.reloads == []
+        assert turn_logger.tick(watch, 1e9, log, saves, now=103.0) == 1e9  # nothing new, no poll due
+        assert len(self._reload_rows(log)) == 2
+
+
+class TestSnapshots:
+    """The bridge mod's saves from each opening of the pause menu, named in reload rows and pruned."""
+
+    def test_a_reload_names_the_last_snapshot_before_it(self, tmp_path, game_log, snapshots):
+        log = tmp_path / "turn_log.jsonl"
+        watch = turn_logger.turn_watch.default()
+        turn_logger.record(18, "LEADER_NZINGA_MBANDE", "Aidan", _at(1, 15), log, poll_s=0)
+        _save_file(snapshots, "Aidan turn 18 2026-10-27 09.00.00", _at(1, 15, 30))  # the turn before Aaron's
+        game_log.turn_line(_at(1, 16), 18, "LEADER_CLEOPATRA", "Aaron")
+        game_log.start_turn(0)
+        turn_logger.log_turn_lines(watch.read(), log)
+        _save_file(snapshots, "Aaron turn 18 2026-10-27 09.00.00", _at(1, 16, 5))  # saved at his turn-change screen
+        left = _save_file(snapshots, "Aaron turn 18 2026-10-27 09.00.00 b", _at(1, 17, 12))  # the menu he exited by
+        game_log.relaunch()
+        game_log.load()
+        game_log.turn_line(_at(1, 17, 20), 18, "LEADER_CLEOPATRA", "Aaron")
+        _save_file(snapshots, "Aaron turn 18 2026-10-27 17.20.00", _at(1, 17, 21))  # the replay's own
+        watch.read()
+        assert turn_logger.log_reloads(watch.reloads, log) == 1
+        (row,) = turn_logger.read_reloads(log)
+        assert row["snapshot"] == left.name
+
+    def test_no_snapshot_since_the_turn_began_is_none(self, tmp_path, game_log, snapshots):
+        log = tmp_path / "turn_log.jsonl"
+        watch = turn_logger.turn_watch.default()
+        _save_file(snapshots, "Aidan turn 18 2026-10-27 09.00.00", _at(1, 15, 30))
+        game_log.turn_line(_at(1, 16), 18, "LEADER_CLEOPATRA", "Aaron")
+        turn_logger.log_turn_lines(watch.read(), log)
+        game_log.load()  # a crash: no pause menu on the way out
+        game_log.turn_line(_at(1, 17, 20), 18, "LEADER_CLEOPATRA", "Aaron")
+        watch.read()
+        turn_logger.log_reloads(watch.reloads, log)
+        assert turn_logger.read_reloads(log)[0]["snapshot"] is None
+
+    def test_old_snapshots_go_unless_a_reload_names_them(self, tmp_path, snapshots):
+        log = tmp_path / "turn_log.jsonl"
+        now = _at(10, 12).timestamp()
+        old = _save_file(snapshots, "Aidan turn 18 a", _at(1, 15))
+        named = _save_file(snapshots, "Aaron turn 18 a", _at(1, 17))
+        recent = _save_file(snapshots, "Aaron turn 25 a", _at(9, 12))
+        turn_logger.reload_log_path(log).write_text(
+            json.dumps({"at": _at(1, 17, 20).astimezone().isoformat(), "turn": 18, "leader": "LEADER_CLEOPATRA",
+                        "player": "Aaron", "snapshot": named.name}) + "\n",
+            encoding="utf-8",
+        )
+        assert turn_logger.prune_snapshots(log, now=now) == 1
+        assert not old.exists() and named.exists() and recent.exists()
+
+    def test_a_missing_folder_is_no_snapshot(self, tmp_path):
+        assert turn_logger.snapshot_before(_at(1, 17), None, tmp_path / "nowhere") is None
+        assert turn_logger.prune_snapshots(tmp_path / "turn_log.jsonl", tmp_path / "nowhere") == 0

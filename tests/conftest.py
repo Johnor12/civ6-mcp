@@ -32,6 +32,21 @@ class GameLog:
         """The line the game's PlayerChange.lua prints when it builds a turn-change screen."""
         self.write(f"PlayerChange: BuildTurnControls: CurrentGameTurn={turn}")
 
+    def start_turn(self, slot: int) -> None:
+        """The line the game's UnitPanel.lua prints when that slot presses Start Turn."""
+        self.write(f"UnitPanel: OnPlayerChangeClose: {slot}, GameConfiguration.IsPaused()=true")
+
+    def relaunch(self) -> None:
+        """Civ 6 started again: it empties Lua.log and writes its first lines."""
+        self.path.write_bytes(b"")
+        self.write("DebugHotloadCache: GameDebug initialized!", "Test: Test.LUA loaded!")
+
+    def load(self, menu: bool = True) -> None:
+        """The game's lines for a save being loaded: picked in the Load Game menu, or (menu=False) by the tooling."""
+        if menu:
+            self.write("LoadGameMenu: LoadGameMenu::OnLoadYes() leaving the network session.")
+        self.write("StagingRoom: Building Game Setup", "LoadScreen: true", "LoadScreen: OnLoadGameViewStateDone")
+
 
 @pytest.fixture(autouse=True)
 def game_log(tmp_path, monkeypatch) -> GameLog:

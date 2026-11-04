@@ -37,3 +37,63 @@ if MCPB_TURN_LINES == nil then
 		end
 	end)
 end
+
+-- Snapshots: a save of the hotseat game whenever the pause menu opens, kept
+-- in Documents/My Games/Sid Meier's Civilization VI/Snapshots, beside Saves,
+-- where the Load Game list does not look, so the state a player left can be
+-- seen after they reload. Every way out of a game passes through the pause
+-- menu (Load Game, Exit to Main Menu, Exit to Desktop, and the window's close
+-- button, which opens it to ask), and the menu stays up long enough for the
+-- save, which is not immediate, to finish. No sound, no message. One file per
+-- player and turn per Lua state, overwritten each time the menu opens: a load
+-- starts a new Lua state, so a replay never overwrites the file from before
+-- it. The turn logger names the snapshot in each reload log row and prunes
+-- old ones. One line in Lua.log per snapshot:
+--     MCPB|0|N|<unix time>|<turn>|<slot>|<file name>
+if MCPB_SNAPSHOTS == nil then
+	MCPB_SNAPSHOTS = 1
+	local session = os.date("%Y-%m-%d %H.%M.%S")  -- when this Lua state began
+	local pending = nil  -- os.time() of a snapshot whose save has not completed
+	local function snapshot()
+		if not GameConfiguration.IsHotseat() then
+			return
+		end
+		if pending ~= nil and os.time() - pending < 30 then
+			return
+		end
+		local me = Game.GetLocalPlayer()
+		local pc = PlayerConfigurations[me]
+		if pc == nil then
+			return
+		end
+		local saveType = Network.GetGameConfigurationSaveType()
+		local saves = tostring(UI.GetSaveLocationPath(SaveLocations.LOCAL_STORAGE, saveType, SaveLocationOptions.NO_OPTIONS, false))
+		local root, found = string.gsub(saves, "/Saves/[^/]*/?$", "")
+		if found ~= 1 then  -- never into a folder the Load Game list shows
+			print("MCPB|0|N|error|unexpected save folder " .. saves)
+			return
+		end
+		local turn = Game.GetCurrentGameTurn()
+		local player = string.gsub(tostring(pc:GetPlayerName()), "[^%w%- ]", "_")
+		local name = string.format("%s turn %d %s", player, turn, session)
+		pending = os.time()
+		Network.SaveGame({
+			Name = name,
+			Path = root .. "/Snapshots/" .. name,
+			Location = SaveLocations.LOCAL_STORAGE,
+			Type = saveType,
+			IsAutosave = false,
+			IsQuicksave = false,
+		})
+		print("MCPB|0|N|" .. table.concat({ tostring(pending), tostring(turn), tostring(me), name }, "|"))
+	end
+	Events.SaveComplete.Add(function()
+		pending = nil
+	end)
+	LuaEvents.InGameTopOptionsMenu_Show.Add(function()
+		local ok, err = pcall(snapshot)
+		if not ok then
+			print("MCPB|0|N|error|" .. tostring(err))
+		end
+	end)
+end

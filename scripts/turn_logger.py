@@ -25,6 +25,24 @@ with duration_of_current_turn(); the Slack bot (scripts/slack_bot.py)
 first has a poll log the turn. The log, not Lua.log, is the record: the
 game empties Lua.log every time it is launched.
 
+Every save loaded into the game gets a row in scripts/data/reload_log.jsonl
+(beside the turn log), from the turn line that follows the load: the
+turn the save was on, whether Civ 6 had been closed and launched again
+first (it empties Lua.log when it starts), whether the save was picked
+in the Load Game menu or loaded by the MCP tooling, whether it put the
+player mid-turn or back on the turn-change screen, whether they had
+already pressed Start Turn on that turn, and when the turn log says the
+turn began. A player who replays a turn from its start (save-scumming)
+shows up as a row with had_started true and mid_turn false.
+
+What the game looked like before the load is in the row's snapshot: the
+bridge mod saves the game into Documents/My Games/Sid Meier's
+Civilization VI/Snapshots (beside Saves, where the Load Game list does
+not look) whenever the pause menu opens, which every way out of a game
+goes through. The row names the newest snapshot taken before the load
+since the turn then in progress began, or null. Snapshots no row names
+are deleted after SNAPSHOT_KEEP_S.
+
 The poll stands in for the Save Game button players are meant to press on
 every turn-change screen and sometimes forget. When the hotseat save
 folder holds no save of the current turn (none written since the turn can
@@ -55,7 +73,7 @@ from typing import TYPE_CHECKING
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 from civ_mcp import hotseat, turn_watch  # noqa: E402
-from civ_mcp.bridge import default_lua_log, hotseat_saves_dir  # noqa: E402
+from civ_mcp.bridge import default_lua_log, hotseat_saves_dir, snapshots_dir  # noqa: E402
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -66,6 +84,9 @@ if TYPE_CHECKING:
 log = logging.getLogger("turn_logger")
 
 TURN_LOG_PATH = REPO_ROOT / "scripts" / "data" / "turn_log.jsonl"
+RELOAD_LOG_NAME = "reload_log.jsonl"  # beside the turn log
+SNAPSHOTS_DIR = snapshots_dir()  # the bridge mod's saves from each opening of the pause menu
+SNAPSHOT_KEEP_S = 7 * 86400  # how long a snapshot no reload log row names is kept (~2 MB each)
 WATCH_S = 1  # how often the loop reads what Lua.log gained
 POLL_S = 900  # how often it asks the game anyway, in case a turn left no line in Lua.log
 SCREEN_POLL_S = 2  # how late a row is when a turn-change screen line set off its poll: one WATCH_S and the poll
@@ -161,6 +182,139 @@ def log_turn_lines(starts: Iterable[TurnStart], path: Path | None = None) -> boo
     return wrote
 
 
+def reload_log_path(path: Path | None = None) -> Path:
+    """The reload log beside the turn log at `path`."""
+    return (path or TURN_LOG_PATH).with_name(RELOAD_LOG_NAME)
+
+
+def _local(at: str) -> datetime:
+    return datetime.fromisoformat(at).astimezone().replace(tzinfo=None)
+
+
+def _stamp(at: datetime) -> str:
+    return at.astimezone().isoformat(timespec="seconds")
+
+
+def read_reloads(path: Path | None = None) -> list[dict]:
+    """The reload log's rows; `path` is the turn log beside it."""
+    reload_path = reload_log_path(path)
+    if not reload_path.exists():
+        return []
+    rows = []
+    for line in reload_path.read_text(encoding="utf-8").splitlines():
+        try:
+            row = json.loads(line)
+            _local(row["at"])
+            rows.append(row)
+        except (ValueError, KeyError, TypeError):
+            log.warning("skipping a bad row in %s: %r", reload_path, line)
+    return rows
+
+
+def snapshot_before(at: datetime, since: datetime | None, folder: Path | None = None) -> Path | None:
+    """The newest snapshot saved before `at` and not before `since`, or None."""
+    folder = folder or SNAPSHOTS_DIR
+    best, best_mtime = None, None
+    try:
+        files = list(folder.glob("*.Civ6Save"))
+    except OSError:
+        return None
+    for f in files:
+        try:
+            mtime = datetime.fromtimestamp(f.stat().st_mtime)
+        except OSError:
+            continue
+        if mtime < at and (since is None or mtime >= since) and (best_mtime is None or mtime > best_mtime):
+            best, best_mtime = f, mtime
+    return best
+
+
+def prune_snapshots(path: Path | None = None, folder: Path | None = None, now: float | None = None) -> int:
+    """Delete snapshots older than SNAPSHOT_KEEP_S that no reload log row names; the number deleted."""
+    folder = folder or SNAPSHOTS_DIR
+    named = {row.get("snapshot") for row in read_reloads(path)}
+    cutoff = (time.time() if now is None else now) - SNAPSHOT_KEEP_S
+    deleted = 0
+    try:
+        files = list(folder.glob("*.Civ6Save"))
+    except OSError:
+        return 0
+    for f in files:
+        try:
+            if f.name not in named and f.stat().st_mtime < cutoff:
+                f.unlink()
+                deleted += 1
+        except OSError:
+            log.warning("could not delete the old snapshot %s", f)
+    if deleted:
+        log.info("deleted %d snapshot(s) older than %d days", deleted, SNAPSHOT_KEEP_S // 86400)
+    return deleted
+
+
+def _turn_in_progress(records: list[TurnRecord], at: datetime) -> TurnRecord | None:
+    """The first row of the turn the log was on just before `at` (see current_turn), or None."""
+    before = [r for r in records if r.at < at]
+    if not before:
+        return None
+    return next(r for r in before if r.key == before[-1].key)
+
+
+def log_reloads(starts: Iterable[TurnStart], path: Path | None = None, snapshots: Path | None = None) -> int:
+    """Add a reload log row for each turn line that came right after a save was loaded; the number added.
+
+    `path` is the turn log; the reload log is beside it. A load the
+    reload log already has (same time, turn and player) is passed over,
+    so the whole of Lua.log can be offered again after a restart.
+    turn_began is the first turn log row of that turn from before the
+    load, None when the turn log had none. snapshot is the newest file in
+    `snapshots` (SNAPSHOTS_DIR) saved before the load since the turn in
+    progress then began (its first row, less that row's poll_s).
+    """
+    done = {(_local(row["at"]), int(row["turn"]), row["leader"], row["player"]) for row in read_reloads(path)}
+    records = read_records(path)
+    added = 0
+    for start in starts:
+        if start.reload is None or (start.at, *start.key) in done:
+            continue
+        began = next((r.at for r in records if r.key == start.key and r.at < start.at), None)
+        current = _turn_in_progress(records, start.at)
+        since = current.at - timedelta(seconds=current.poll_s or 0) if current else None
+        snapshot = snapshot_before(start.at, since, snapshots)
+        reload_path = reload_log_path(path)
+        row = {
+            "at": _stamp(start.at),
+            "turn": start.turn,
+            "leader": start.leader,
+            "player": start.player,
+            "relaunched": start.reload.relaunched,
+            "menu": start.reload.menu,
+            "mid_turn": start.loaded,
+            "had_started": start.reload.had_started,
+            "turn_began": _stamp(began) if began else None,
+            "snapshot": snapshot.name if snapshot else None,
+        }
+        reload_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(reload_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(row) + "\n")
+        done.add((start.at, *start.key))
+        added += 1
+        log.info(
+            "save loaded at %s: %s's turn %d%s; %s, %s, %s; %s; state before it: %s",
+            f"{start.at:%a %d %b %H:%M:%S}",
+            start.player,
+            start.turn,
+            f" (began {began:%a %H:%M:%S})" if began else " (not in the turn log before)",
+            "Civ 6 relaunched first" if start.reload.relaunched else "no relaunch",
+            "picked in the Load Game menu" if start.reload.menu else "loaded by the MCP tooling",
+            "mid-turn" if start.loaded else "on the turn-change screen",
+            {True: "had pressed Start Turn before", False: "had not pressed Start Turn", None: "Start Turn before: unknown"}[
+                start.reload.had_started
+            ],
+            snapshot.name if snapshot else "no snapshot",
+        )
+    return added
+
+
 async def poll(
     path: Path | None = None,
     save: bool = False,
@@ -212,21 +366,32 @@ def tick(
 
     `next_poll` and `now` are time.monotonic() values; returns the next
     poll's. A turn line or a turn-change screen line sets off a poll at
-    once, which sees that the new turn has a save.
+    once, which sees that the new turn has a save. Loads the watch saw,
+    in this pass or the poll's read, go into the reload log, and a pass
+    that polled prunes old snapshots.
     """
     now = time.monotonic() if now is None else now
+    polled = True
     try:
         screens = watch.screens
         started = log_turn_lines(watch.read(), path)
         if started or watch.screens != screens:
             asyncio.run(poll(path, save=True, saves_dir=saves_dir, poll_s=SCREEN_POLL_S))
         elif now < next_poll:
-            return next_poll
+            polled = False
         else:
             asyncio.run(poll(path, save=True, saves_dir=saves_dir))
     except Exception:
         log.exception("turn watch failed")
-    return now + POLL_S
+    try:
+        if watch.reloads:
+            log_reloads(watch.reloads, path)
+            watch.reloads.clear()
+        if polled:
+            prune_snapshots(path)
+    except Exception:
+        log.exception("could not log a save load")
+    return now + POLL_S if polled else next_poll
 
 
 def run(path: Path | None = None, saves_dir: Path | None = None) -> None:
@@ -234,7 +399,9 @@ def run(path: Path | None = None, saves_dir: Path | None = None) -> None:
 
     The watch's first read is all of Lua.log since the game was launched:
     the turns in it that the log has no row for (this script was not
-    running) are added, and the game is asked at once.
+    running) are added, so are the loads the reload log has no row for
+    (with had_started unknown when the turn began before the launch), and
+    the game is asked at once.
     """
     watch = turn_watch.default()
     log_turn_lines(watch.read(), path)
@@ -380,9 +547,9 @@ def main() -> None:
     current = duration_of_current_turn()
     last = f"{current[0].player}'s turn {current[0].turn} since {current[0].at:%a %d %b %H:%M}" if current else "none"
     log.info(
-        "reading %s every %d s for turn starts, asking the game on each and every %d min; log %s, "
-        "last turn: %s; a turn without a save in %s gets one",
-        default_lua_log(), WATCH_S, POLL_S // 60, TURN_LOG_PATH, last, hotseat_saves_dir(),
+        "reading %s every %d s for turn starts and loads, asking the game on each and every %d min; log %s, "
+        "loads in %s, last turn: %s; a turn without a save in %s gets one",
+        default_lua_log(), WATCH_S, POLL_S // 60, TURN_LOG_PATH, reload_log_path().name, last, hotseat_saves_dir(),
     )
     run()
 
