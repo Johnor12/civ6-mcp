@@ -471,14 +471,16 @@ def test_report_gives_the_play_time(game):
             "Play time: from pressing Start Turn to the end of the turn."
         ),
         "",
-        f"*Yesterday (Tue 27 Oct): 5 turns, 26m 00s average, play time: {turn_times.hms((25 + 14 + 59 / 60 + 7) / 3)} (3 turns)*",
+        f"*Yesterday (Tue 27 Oct): 5 turns, 26m 00s average, {turn_times.hms((25 + 14 + 59 / 60 + 7) / 3)} average play time (3 turns)*",
+        "Total play time: 46m 59s (3 turns)",  # Ann 25 + 7, Di 14:59; not Claude's 5
         "1. Bob: 1h 05m 00s (1 turn)",
         "2. Ann: 20m 00s (2 turns), play time: 16m 00s",
         f"3. Di: 15m 00s (1 turn), play time: {di_take}",
         "4. Cy: 10m 00s (1 turn)",
         "Claude took 1 turn (Bob), play time: 5m 00s",
         "",
-        f"*Since Tue 27 Oct: 5 turns, 26m 00s average, play time: {turn_times.hms((25 + 14 + 59 / 60 + 7) / 3)} (3 turns)*",
+        f"*Since Tue 27 Oct: 5 turns, 26m 00s average, {turn_times.hms((25 + 14 + 59 / 60 + 7) / 3)} average play time (3 turns)*",
+        "Total play time: 46m 59s (3 turns)",
         "1. Bob: 1h 05m 00s (1 turn)",
         "2. Ann: 20m 00s (2 turns), play time: 16m 00s",
         f"3. Di: 15m 00s (1 turn), play time: {di_take}",
@@ -497,8 +499,33 @@ def test_a_player_with_some_turns_untimed_gets_the_count(game):
     game.row(at(10, 50), 2, "LEADER_B", poll_s=0)
     seq, _ = game.compute()
     lines = turn_report.message(seq, today=date(2026, 10, 28)).splitlines()
-    assert lines[3] == "1. Ann: 10m 00s (2 turns), play time: 9m 00s (1 turn)"
-    assert lines[2] == "*Yesterday (Tue 27 Oct): 5 turns, 10m 00s average, play time: 9m 00s (1 turn)*"
+    assert lines[2] == "*Yesterday (Tue 27 Oct): 5 turns, 10m 00s average, 9m 00s average play time (1 turn)*"
+    assert lines[3] == "Total play time: 9m 00s (1 turn)"
+    assert lines[4] == "1. Ann: 10m 00s (2 turns), play time: 9m 00s (1 turn)"
+
+
+def test_total_play_time_covers_each_section_and_the_record_comes_first(game):
+    game.row(at(16), 1, "LEADER_A", poll_s=0)
+    game.taken(at(16, 10), 1, "LEADER_A")  # Ann: 30 min on Tuesday, 20 of play time
+    game.row(at(16, 30), 1, "LEADER_B", poll_s=0)
+    game.taken(at(24 + 9, 2), 1, "LEADER_B")  # Bob: 40 min, ends Wednesday, 8 of play time
+    game.row(at(24 + 9, 10), 1, "LEADER_C", poll_s=0)  # Cy: 10 min on Wednesday, untimed
+    game.row(at(24 + 9, 20), 1, "LEADER_D", poll_s=0)  # Di's turn in progress
+    seq, _ = game.compute()
+    lines = turn_report.message(seq, today=date(2026, 10, 29)).splitlines()
+    assert lines[2:5] == [
+        "*Yesterday (Wed 28 Oct): 2 turns, 25m 00s average, 8m 00s average play time (1 turn)*",
+        "2 turns taken, a new record! Previous record: 1 (Tue 27 Oct)",
+        "Total play time: 8m 00s (1 turn)",
+    ]
+    since = lines.index("*Since Tue 27 Oct: 3 turns, 26m 40s average, 14m 00s average play time (2 turns)*")
+    assert lines[since + 1] == "Total play time: 28m 00s (2 turns)"
+
+
+def test_no_total_play_time_without_a_timed_turn(game):
+    _week(game)
+    seq, _ = game.compute()
+    assert not any(line.startswith("Total play time") for line in turn_report.message(seq, today=date(2026, 10, 29)).splitlines())
 
 
 def test_the_cli_report_has_the_play_time(game):

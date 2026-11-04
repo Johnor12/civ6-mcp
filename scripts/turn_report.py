@@ -22,7 +22,9 @@ since the log began (again with the turn count, the average turn and each
 player's average and number of turns). Beside each average is the time to
 take the turn, from Start Turn to its end, over the turns that have one
 (the taken log began on 4 Nov 2026), with its own count when that covers
-fewer turns; turns Claude took get a line of their own instead. Nothing
+fewer turns; turns Claude took get a line of their own instead. Under
+each heading, the players' play time added up (the previous workday's,
+then all of it since the taken log began). Nothing
 is written anywhere; the turn log is the history. A workday on which the
 process is not up at POST_AT gets no report. scripts/start.py runs this
 next to the turn logger, the announcer and the bot. The bot token comes
@@ -80,15 +82,32 @@ def _ranking(averages: list[turn_times.PlayerAverage]) -> list[str]:
 
 
 def _count(done: list[tuple[turn_times.PlayerTurn, datetime]]) -> str:
-    """'3 turns, 23m 20s average, play time: 12m 05s'; '0 turns' when there are none."""
+    """'3 turns, 23m 20s average, 12m 05s average play time (2 turns)'; '0 turns' when there are none.
+
+    The play time's turn count shows when it covers fewer turns than `done`.
+    """
     turns = _turns(len(done))
     if not done:
         return turns
     own = turn_times.own_takes(done)
-    return (
-        f"{turns}, {turn_times.hms(turn_times.mean_minutes(done))} average"
-        + _play_time(turn_times.mean_take_minutes(own), len(own), len(done))
-    )
+    text = f"{turns}, {turn_times.hms(turn_times.mean_minutes(done))} average"
+    mean = turn_times.mean_take_minutes(own)
+    if mean is not None:
+        text += f", {turn_times.hms(mean)} average play time" + (f" ({_turns(len(own))})" if len(own) != len(done) else "")
+    return text
+
+
+def _total(done: list[tuple[turn_times.PlayerTurn, datetime]]) -> list[str]:
+    """'Total play time: 1h 12m 00s (3 turns)': the players' play time added up; nothing when none has one.
+
+    Like the averages it leaves out the turns Claude took. The turn count
+    shows when it covers fewer turns than `done`.
+    """
+    own = turn_times.own_takes(done)
+    total = turn_times.total_take_minutes(own)
+    if total is None:
+        return []
+    return [f"Total play time: {turn_times.hms(total)}" + (f" ({_turns(len(own))})" if len(own) != len(done) else "")]
 
 
 def _claude(done: list[tuple[turn_times.PlayerTurn, datetime]]) -> list[str]:
@@ -129,9 +148,9 @@ def message(seq: list[turn_times.PlayerTurn], today: date | None = None) -> str:
     Each heading gives the turn count, the average turn and the average
     play time; each ranking line gives that player's average, how many
     turns it covers and their play time. Under the previous workday's
-    heading, its turn count against the record (_record); a line for the
-    turns Claude took follows each ranking. Empty while no turn has
-    finished.
+    heading, its turn count against the record (_record); then under each
+    heading the total play time (_total), and a line for the turns Claude
+    took follows each ranking. Empty while no turn has finished.
     """
     done = turn_times.finished(seq)
     if not done:
@@ -144,7 +163,7 @@ def message(seq: list[turn_times.PlayerTurn], today: date | None = None) -> str:
     head = f"*Turn times* in workday hours ({WORKDAY}), slowest first."
     if any(pt.taken is not None for pt, _ in done):
         head += " Play time: from pressing Start Turn to the end of the turn."
-    lines = [head, "", f"*{label}: {_count(yesterday)}*", *_record(seq, day, len(yesterday))]
+    lines = [head, "", f"*{label}: {_count(yesterday)}*", *_record(seq, day, len(yesterday)), *_total(yesterday)]
     if yesterday:
         lines += _ranking(turn_times.player_averages(yesterday)) + _claude(yesterday)
         played = {pt.player for pt, _ in yesterday}
@@ -152,8 +171,8 @@ def message(seq: list[turn_times.PlayerTurn], today: date | None = None) -> str:
         idle = sorted((p for p in seats if p not in played), key=seats.get)
         if idle:
             lines.append("No turn: " + ", ".join(idle))
-    lines += ["", f"*Since {seq[0].start:%a %d %b}: {_count(done)}*", *_ranking(turn_times.player_averages(done))]
-    lines += _claude(done)
+    lines += ["", f"*Since {seq[0].start:%a %d %b}: {_count(done)}*", *_total(done)]
+    lines += _ranking(turn_times.player_averages(done)) + _claude(done)
     return "\n".join(lines)
 
 

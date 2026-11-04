@@ -389,6 +389,12 @@ def mean_take_minutes(done: list[tuple[PlayerTurn, datetime]]) -> float | None:
     return statistics.mean(mins) if mins else None
 
 
+def total_take_minutes(done: list[tuple[PlayerTurn, datetime]]) -> float | None:
+    """The play time summed over `done` (pass own_takes or claude_takes); None for none."""
+    mins = [m for pt, end in done if (m := take_minutes(pt, end)) is not None]
+    return sum(mins) if mins else None
+
+
 def player_averages(done: list[tuple[PlayerTurn, datetime]]) -> list[PlayerAverage]:
     """One entry per player with a turn among `done` (see finished, ended_on), slowest on average first.
 
