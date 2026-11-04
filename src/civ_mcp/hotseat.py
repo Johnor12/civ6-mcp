@@ -408,6 +408,26 @@ async def accept_turn(conn: BridgeConnection) -> HotseatStatus:
     return await ingame_status(conn)
 
 
+# A turn line (civ_mcp.turn_watch) saying the MCP tooling took the local
+# player's seat, so the turn logger can tell a turn Claude took from one the
+# player took: "MCPB|0|T|<unix time>|<turn>|<slot>|<leader>|<name>|standin".
+# Printed inside a bridge command, it reaches Lua.log wrapped in that
+# command's output line, which the watch reads all the same.
+_STANDIN_LINE_LUA = (
+    "local me = Game.GetLocalPlayer() "
+    "local pc = PlayerConfigurations[me] "
+    'local name = string.gsub(tostring(pc:GetPlayerName()), "|", "/") '
+    'print("MCPB|0|T|" .. table.concat({ tostring(os.time()), tostring(Game.GetCurrentGameTurn()), '
+    'tostring(me), tostring(pc:GetLeaderTypeName()), name, "standin" }, "|")) '
+    f'print("{SENTINEL}")'
+)
+
+
+async def mark_standin(conn: BridgeConnection) -> None:
+    """Print the stand-in line for the turn logger: Claude is taking this player's turn from now on."""
+    await conn.execute_in_context(CONTEXT_INGAME, _STANDIN_LINE_LUA, 6.0)
+
+
 _END_TURN_LUA = (
     "local me = Game.GetLocalPlayer() "
     "UI.RequestAction(ActionTypes.ACTION_ENDTURN) "

@@ -25,6 +25,13 @@ turn began. Each turn's start is placed in the middle of the window those
 facts leave, and players with no evidence of their own are spaced evenly
 between their neighbours, which averages the time over the turns taken.
 
+Beside each turn's total, its play time: from when it was taken
+(turn_logger's taken log: the player pressed Start Turn, or Claude took the
+seat as stand-in) to its end. A turn Claude took counts as Claude's, not
+the player's: player_averages leaves it out of the player's play time
+and claude_takes lists it, while its total still counts for the player.
+Turns from before the taken log began have a total only.
+
 Times are minutes of workday time (turn_logger.WORKDAY, what the bot's turn
 limit counts), so a turn held overnight costs nothing. scripts/turn_report.py
 posts player_averages() in the game channel every workday morning, and
@@ -106,6 +113,8 @@ class PlayerTurn:
     earliest: datetime | None = None  # the window the start was placed in
     latest: datetime | None = None
     basis: str = ""  # autosave | row | save | row+save | interpolated
+    taken: datetime | None = None  # first taken log row, the middle of its window; None: none
+    claude: bool = False  # Claude took the seat on this turn
 
     @property
     def evidence(self) -> list[datetime]:
@@ -128,6 +137,8 @@ class PlayerAverage:
     mean_minutes: float
     median_minutes: float
     max_minutes: float
+    taken: int = 0  # turns the player took themselves with a play time
+    take_mean_minutes: float | None = None  # their average play time; None without one
 
 
 def player_turns(
@@ -301,7 +312,25 @@ def compute(
     seq = player_turns(records, poll_at)
     skipped = attach_saves(seq, saves_dir)
     estimate_starts(seq)
+    attach_taken(seq, turn_logger.read_taken(log_path))
     return seq, skipped
+
+
+def attach_taken(seq: list[PlayerTurn], rows: list[turn_logger.TakenRecord]) -> None:
+    """Give each player-turn when it was taken (its first taken log row) and whether Claude took it.
+
+    A row's time is placed in the middle of its window (poll_s), and never
+    before the turn's own start. Rows of turns the log does not cover are
+    passed over.
+    """
+    index = {(pt.turn, pt.leader): pt for pt in seq}
+    for r in rows:
+        pt = index.get((r.turn, r.leader))
+        if pt is None:
+            continue
+        at = max(r.at - timedelta(seconds=r.poll_s / 2), pt.start)
+        pt.taken = at if pt.taken is None else min(pt.taken, at)
+        pt.claude = pt.claude or r.by == "claude"
 
 
 def finished(seq: list[PlayerTurn]) -> list[tuple[PlayerTurn, datetime]]:
@@ -329,8 +358,35 @@ def mean_minutes(done: list[tuple[PlayerTurn, datetime]]) -> float:
     return statistics.mean(minutes(pt, end) for pt, end in done)
 
 
+def take_minutes(pt: PlayerTurn, end: datetime) -> float | None:
+    """A finished turn's play time, from when it was taken to its end, in minutes of workday time; None if unknown."""
+    if pt.taken is None:
+        return None
+    return turn_logger.workday_seconds(min(pt.taken, end), end) / 60
+
+
+def own_takes(done: list[tuple[PlayerTurn, datetime]]) -> list[tuple[PlayerTurn, datetime]]:
+    """The turns among `done` that their player took (not Claude) with a known play time."""
+    return [(pt, end) for pt, end in done if pt.taken is not None and not pt.claude]
+
+
+def claude_takes(done: list[tuple[PlayerTurn, datetime]]) -> list[tuple[PlayerTurn, datetime]]:
+    """The turns among `done` that Claude took as stand-in."""
+    return [(pt, end) for pt, end in done if pt.claude]
+
+
+def mean_take_minutes(done: list[tuple[PlayerTurn, datetime]]) -> float | None:
+    """The average play time among `done` (pass own_takes or claude_takes); None for none."""
+    mins = [m for pt, end in done if (m := take_minutes(pt, end)) is not None]
+    return statistics.mean(mins) if mins else None
+
+
 def player_averages(done: list[tuple[PlayerTurn, datetime]]) -> list[PlayerAverage]:
-    """One entry per player with a turn among `done` (see finished, ended_on), slowest on average first."""
+    """One entry per player with a turn among `done` (see finished, ended_on), slowest on average first.
+
+    Totals cover every turn; the play time only the turns the player
+    took themselves (own_takes): Claude's are in claude_takes.
+    """
     by_player: dict[str, list[tuple[PlayerTurn, datetime]]] = {}
     for pt, end in done:
         by_player.setdefault(pt.player, []).append((pt, end))
@@ -338,6 +394,7 @@ def player_averages(done: list[tuple[PlayerTurn, datetime]]) -> list[PlayerAvera
     for player, turns in by_player.items():
         mins = [minutes(pt, end) for pt, end in turns]
         first = turns[0][0]
+        own = own_takes(turns)
         out.append(PlayerAverage(
             player=player,
             leader=first.leader,
@@ -347,6 +404,8 @@ def player_averages(done: list[tuple[PlayerTurn, datetime]]) -> list[PlayerAvera
             mean_minutes=statistics.mean(mins),
             median_minutes=statistics.median(mins),
             max_minutes=max(mins),
+            taken=len(own),
+            take_mean_minutes=mean_take_minutes(own),
         ))
     out.sort(key=lambda a: (-a.mean_minutes, a.seat))
     return out
@@ -366,9 +425,14 @@ def report(seq: list[PlayerTurn], skipped: list[str], turns: bool = False) -> st
     lines = []
     if turns:
         for pt, end in done:
+            take = take_minutes(pt, end)
+            taken = (
+                f"taken {pt.taken:%H:%M:%S}{' by Claude' if pt.claude else ''}, play time: {hms(take)}; "
+                if take is not None else ""
+            )
             lines.append(
                 f"T{pt.turn:<3}{pt.player:<14}{pt.start:%a %d %H:%M:%S} -> {end:%a %H:%M:%S}  "
-                f"{hms(minutes(pt, end)):>11}  {pt.basis:<13}"
+                f"{hms(minutes(pt, end)):>11}  {pt.basis:<13}{taken}"
                 f"window {pt.earliest:%H:%M:%S}-{pt.latest:%H:%M:%S}  "
                 + "; ".join(
                     [f"log {t:%H:%M:%S}" for t in sorted(pt.rows)]
@@ -377,17 +441,32 @@ def report(seq: list[PlayerTurn], skipped: list[str], turns: bool = False) -> st
                 )
             )
         lines.append("")
-    lines.append(f"{'player':<14}{'turns':>6}{'guessed':>8}{'average':>12}{'median':>12}{'longest':>12}")
+    def take(mean: float | None, n: int) -> str:
+        return f"{hms(mean)} ({n})" if mean is not None else "-"
+
+    lines.append(
+        f"{'player':<14}{'turns':>6}{'guessed':>8}{'average':>12}{'median':>12}{'longest':>12}"
+        f"{'play time (turns)':>20}"
+    )
     for a in player_averages(done):
         lines.append(
             f"{a.player:<14}{a.turns:>6}{a.guessed:>8}{hms(a.mean_minutes):>12}{hms(a.median_minutes):>12}"
-            f"{hms(a.max_minutes):>12}"
+            f"{hms(a.max_minutes):>12}{take(a.take_mean_minutes, a.taken):>20}"
         )
     median = statistics.median(minutes(pt, end) for pt, end in done)
-    lines.append(f"{'ALL':<14}{len(done):>6}{'':>8}{hms(mean_minutes(done)):>12}{hms(median):>12}")
+    own = own_takes(done)
+    lines.append(
+        f"{'ALL':<14}{len(done):>6}{'':>8}{hms(mean_minutes(done)):>12}{hms(median):>12}{'':>12}"
+        f"{take(mean_take_minutes(own), len(own)):>20}"
+    )
+    claude = claude_takes(done)
+    if claude:
+        lines.append(f"{'Claude':<14}{'':>50}{take(mean_take_minutes(claude), len(claude)):>20}")
     first, last = seq[0].start, seq[-1].start
     lines.append(
         f"\nMinutes of workday time ({turn_logger.WORKDAY}). "
+        "Play time: from Start Turn (or Claude taking the seat) to the turn's end; Claude's turns are in its "
+        "own row, not the player's. "
         f"{len(done)} player-turns from {first:%a %d %b %H:%M} to {last:%a %d %b %H:%M}; "
         f"{sum(bool(pt.saves) for pt in seq)} have a save of their own, "
         f"{sum(pt.autosave is not None for pt in seq)} an autosave. "

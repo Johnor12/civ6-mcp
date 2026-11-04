@@ -85,6 +85,12 @@ def _turn(at: datetime, player: str = "Randy", turn: int = 3, leader: str = "LEA
     turn_logger.record(turn, leader, player, at, poll_s=0)
 
 
+def _taken(at: datetime, player: str = "Randy", turn: int = 3, leader: str = "LEADER_GENGHIS_KHAN", by: str = "player") -> None:
+    """The taken log row the turn logger writes when the player presses Start Turn, or Claude takes the seat."""
+    taken = turn_logger.turn_watch.TurnTaken(at, turn, leader, player, by)
+    assert turn_logger.log_taken([taken]) == 1
+
+
 def _check(slack: FakeSlack, at: datetime) -> bool:
     slack.now = at
     return turn_announcer.announce(slack, now=at)
@@ -154,6 +160,21 @@ class TestRecentTurns:
         _turn(_at(0, 11), player="Aaron", leader="LEADER_CLEOPATRA", turn=4)
         assert _check(slack, _at(0, 11, 1))
         assert slack.posts[-1] == f"<@{AARON}> it's your turn (turn 4). Since my last post: John 10m 00s."
+
+    def test_the_list_gives_each_turns_play_time(self, slack):
+        _turn(_at(0, 10), player="Heldi", leader="LEADER_GITARJA")
+        assert _check(slack, _at(0, 10, 1))
+        _taken(_at(0, 10, 20), player="Heldi", leader="LEADER_GITARJA")
+        _turn(_at(0, 10, 30))  # Randy
+        slack.say(_at(0, 10, 30), f"<@{RANDY}>")
+        assert not _check(slack, _at(0, 10, 31))
+        _taken(_at(0, 11, 30), by="claude")  # the hour was up: Claude took it
+        _turn(_at(0, 11, 34), player="Hunter", leader="LEADER_AMANITORE")
+        assert _check(slack, _at(0, 11, 35))
+        assert slack.posts[-1] == (
+            f"<@{HUNTER}> it's your turn (turn 3). Since my last post: "
+            "Heldi 30m 00s (play time: 10m 00s), Randy 1h 04m 00s (Claude, play time: 4m 00s)."
+        )
 
     def test_without_a_post_of_its_own_the_bot_lists_the_last_day(self, slack):
         _turn(_at(0, 9), player="Cameron", leader="LEADER_JULIUS_CAESAR")

@@ -8,8 +8,11 @@ MCPBridge_Start("InGame")
 --     MCPB|0|T|<unix time>|<turn>|<slot>|<leader type>|<player name>|begin
 -- "load" in place of "begin" is a save loaded into a turn already under way,
 -- which fires no LocalPlayerTurnBegin; the game's PlayerChange.lua handles
--- that case the same way. The block runs once per Lua state: the tooling
--- also sends it through the bridge into a game that loaded an older copy.
+-- that case the same way. "play" is the player pressing Start Turn on the
+-- turn-change screen: PlayerChange.lua's OK button fires
+-- LuaEvents.PlayerChange_Close, and so does the MCP tooling's
+-- begin_standin_turn, which prints a "standin" line of its own first. The
+-- block runs once per Lua state.
 if MCPB_TURN_LINES == nil then
 	MCPB_TURN_LINES = 1
 	local function turnLine(why)
@@ -35,6 +38,9 @@ if MCPB_TURN_LINES == nil then
 		if player ~= nil and player:IsTurnActive() then
 			turnLine("load")
 		end
+	end)
+	LuaEvents.PlayerChange_Close.Add(function()
+		turnLine("play")
 	end)
 end
 

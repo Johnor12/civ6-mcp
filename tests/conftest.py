@@ -28,6 +28,12 @@ class GameLog:
         """The line the bridge mod prints when a hotseat turn begins (or a save is loaded into one)."""
         self.write(f"MCPBridge_InGame: MCPB|0|T|{int(at.timestamp())}|{turn}|{slot}|{leader}|{player}|{why}")
 
+    def taken_line(self, at: datetime, turn: int, leader: str, player: str, slot: int = 0, why: str = "play") -> None:
+        """The bridge mod's line for Start Turn pressed ("play"), or the MCP tooling's for Claude taking the seat
+        ("standin"), which comes wrapped in the output line of the bridge command that printed it."""
+        line = f"MCPB|0|T|{int(at.timestamp())}|{turn}|{slot}|{leader}|{player}|{why}"
+        self.write(f"MCPBridge_InGame: MCPB|1793740441034|O|{line}" if why == "standin" else f"MCPBridge_InGame: {line}")
+
     def screen_line(self, turn: int) -> None:
         """The line the game's PlayerChange.lua prints when it builds a turn-change screen."""
         self.write(f"PlayerChange: BuildTurnControls: CurrentGameTurn={turn}")

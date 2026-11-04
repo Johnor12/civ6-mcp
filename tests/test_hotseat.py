@@ -258,3 +258,65 @@ class TestLoadFlow:
         conn = _FakeBridge(where=None)
         with pytest.raises(ConnectionError):
             _run(hotseat.load_hotseat_save(conn, "X"))
+
+
+class TestStandinLine:
+    def test_mark_standin_prints_a_standin_turn_line(self):
+        conn = _FakeBridge()
+        _run(hotseat.mark_standin(conn))
+        ((context, code),) = conn.sent
+        assert context == CONTEXT_INGAME
+        assert 'print("MCPB|0|T|"' in code and '"standin"' in code and "os.time()" in code
+
+    def _begin(self, monkeypatch, st, mark_fails=False):
+        """Run begin_standin_turn against fakes; the order in which the game was touched."""
+        from types import SimpleNamespace
+
+        from civ_mcp import server
+
+        calls = []
+
+        async def status(conn):
+            return st
+
+        async def mark(conn):
+            calls.append("mark")
+            if mark_fails:
+                raise ConnectionError("bridge busy")
+
+        async def accept(conn):
+            calls.append("accept")
+            return st
+
+        async def briefing(s):
+            return "BRIEFING"
+
+        monkeypatch.setattr(server._hotseat, "status", status)
+        monkeypatch.setattr(server._hotseat, "mark_standin", mark)
+        monkeypatch.setattr(server._hotseat, "accept_turn", accept)
+        monkeypatch.setattr(server._standin, "load_config", lambda: None)
+        monkeypatch.setattr(server._standin, "save_config", lambda cfg: None)
+        monkeypatch.setattr(server, "_turn_briefing", briefing)
+        session = SimpleNamespace(conn=_FakeBridge(), guard=SimpleNamespace(invalidate=lambda: None))
+        ctx = SimpleNamespace(request_context=SimpleNamespace(lifespan_context=session))
+        text = _run(server.begin_standin_turn(ctx, "Poundmaker"))
+        return calls, text
+
+    def test_begin_standin_turn_marks_the_seat_before_pressing_start_turn(self, monkeypatch):
+        st = hotseat.HotseatStatus(
+            screen="ingame", turn=63, local_player=2, leader="LEADER_POUNDMAKER", player_name="Ray",
+            turn_active=True, is_hotseat=True, player_change_visible=True, turn_controls_visible=True,
+        )
+        calls, text = self._begin(monkeypatch, st)
+        assert calls == ["mark", "accept"] and "Stand-in armed" in text
+        st.player_change_visible = False  # the player had pressed Start Turn already
+        calls, _ = self._begin(monkeypatch, st)
+        assert calls == ["mark"]
+
+    def test_a_failed_mark_does_not_stop_the_stand_in(self, monkeypatch):
+        st = hotseat.HotseatStatus(
+            screen="ingame", turn=63, local_player=2, leader="LEADER_POUNDMAKER", player_name="Ray",
+            turn_active=True, is_hotseat=True, player_change_visible=True, turn_controls_visible=True,
+        )
+        calls, text = self._begin(monkeypatch, st, mark_fails=True)
+        assert calls == ["mark", "accept"] and "Stand-in armed" in text

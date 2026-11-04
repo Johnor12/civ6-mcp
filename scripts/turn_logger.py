@@ -25,6 +25,17 @@ with duration_of_current_turn(); the Slack bot (scripts/slack_bot.py)
 first has a poll log the turn. The log, not Lua.log, is the record: the
 game empties Lua.log every time it is launched.
 
+When each turn was taken, as opposed to when its turn-change screen came
+up, goes into scripts/data/taken_log.jsonl (beside the turn log): one row
+per turn and taker, the first time the player pressed Start Turn ("by":
+"player") and the first time Claude took the seat through the MCP tooling's
+begin_standin_turn ("by": "claude"; Claude's own press of Start Turn comes
+right after and counts as Claude's). poll_s is how late the row can be: 0
+from the line the bridge mod or the tooling printed, which carries its
+time; a second or two from the game's own line when the game runs a copy of
+the mod from before those lines (civ_mcp.turn_watch). scripts/turn_times.py
+measures a turn's play time from there to the turn's end.
+
 Every save loaded into the game gets a row in scripts/data/reload_log.jsonl
 (beside the turn log), from the turn line that follows the load: the
 turn the save was on, whether Civ 6 had been closed and launched again
@@ -79,12 +90,13 @@ if TYPE_CHECKING:
     from collections.abc import Iterable
 
     from civ_mcp.bridge import BridgeConnection
-    from civ_mcp.turn_watch import TurnStart, TurnWatch
+    from civ_mcp.turn_watch import TurnStart, TurnTaken, TurnWatch
 
 log = logging.getLogger("turn_logger")
 
 TURN_LOG_PATH = REPO_ROOT / "scripts" / "data" / "turn_log.jsonl"
 RELOAD_LOG_NAME = "reload_log.jsonl"  # beside the turn log
+TAKEN_LOG_NAME = "taken_log.jsonl"  # beside the turn log
 SNAPSHOTS_DIR = snapshots_dir()  # the bridge mod's saves from each opening of the pause menu
 SNAPSHOT_KEEP_S = 7 * 86400  # how long a snapshot no reload log row names is kept (~2 MB each)
 WATCH_S = 1  # how often the loop reads what Lua.log gained
@@ -185,6 +197,80 @@ def log_turn_lines(starts: Iterable[TurnStart], path: Path | None = None) -> boo
 def reload_log_path(path: Path | None = None) -> Path:
     """The reload log beside the turn log at `path`."""
     return (path or TURN_LOG_PATH).with_name(RELOAD_LOG_NAME)
+
+
+def taken_log_path(path: Path | None = None) -> Path:
+    """The taken log beside the turn log at `path`."""
+    return (path or TURN_LOG_PATH).with_name(TAKEN_LOG_NAME)
+
+
+@dataclass(frozen=True)
+class TakenRecord:
+    """A row of the taken log: when a turn was taken, and by whom."""
+
+    at: datetime  # local time, naive
+    turn: int
+    leader: str
+    player: str  # whose turn it is, whoever took it
+    by: str  # "player" (pressed Start Turn) or "claude" (took the seat as stand-in)
+    poll_s: int  # how late the row can be: 0 from a line with its own time
+
+    @property
+    def key(self) -> tuple[int, str, str]:
+        return self.turn, self.leader, self.player
+
+
+def read_taken(path: Path | None = None) -> list[TakenRecord]:
+    """The taken log's rows; `path` is the turn log beside it."""
+    taken_path = taken_log_path(path)
+    if not taken_path.exists():
+        return []
+    rows = []
+    for line in taken_path.read_text(encoding="utf-8").splitlines():
+        try:
+            row = json.loads(line)
+            rows.append(TakenRecord(
+                _local(row["at"]), int(row["turn"]), row["leader"], row["player"], row["by"], int(row["poll_s"])
+            ))
+        except (ValueError, KeyError, TypeError):
+            log.warning("skipping a bad row in %s: %r", taken_path, line)
+    return rows
+
+
+def log_taken(items: Iterable[TurnTaken], path: Path | None = None) -> int:
+    """Add a taken log row for each turn and taker it has none for yet; the number added.
+
+    `path` is the turn log; the taken log is beside it. Only the first
+    time counts: the press after a reload of the turn, or the whole of
+    Lua.log offered again after a restart, adds nothing.
+    """
+    done = {(r.key, r.by) for r in read_taken(path)}
+    added = 0
+    for t in items:
+        if (t.key, t.by) in done:
+            continue
+        row = {
+            "at": _stamp(t.at),
+            "turn": t.turn,
+            "leader": t.leader,
+            "player": t.player,
+            "by": t.by,
+            "poll_s": t.late_s,
+        }
+        taken_path = taken_log_path(path)
+        taken_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(taken_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(row) + "\n")
+        done.add((t.key, t.by))
+        added += 1
+        log.info(
+            "turn %d: %s at %s%s",
+            t.turn,
+            f"{t.player} pressed Start Turn" if t.by == turn_watch.PLAYER else f"Claude took {t.player}'s seat",
+            f"{t.at:%H:%M:%S}",
+            f" (read up to {t.late_s} s after)" if t.late_s else "",
+        )
+    return added
 
 
 def _local(at: str) -> datetime:
@@ -367,8 +453,8 @@ def tick(
     `next_poll` and `now` are time.monotonic() values; returns the next
     poll's. A turn line or a turn-change screen line sets off a poll at
     once, which sees that the new turn has a save. Loads the watch saw,
-    in this pass or the poll's read, go into the reload log, and a pass
-    that polled prunes old snapshots.
+    in this pass or the poll's read, go into the reload log, turns being
+    taken into the taken log, and a pass that polled prunes old snapshots.
     """
     now = time.monotonic() if now is None else now
     polled = True
@@ -391,6 +477,12 @@ def tick(
             prune_snapshots(path)
     except Exception:
         log.exception("could not log a save load")
+    try:
+        if watch.taken:
+            log_taken(watch.taken, path)
+            watch.taken.clear()
+    except Exception:
+        log.exception("could not log a turn being taken")
     return now + POLL_S if polled else next_poll
 
 

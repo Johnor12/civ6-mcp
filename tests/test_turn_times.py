@@ -50,6 +50,13 @@ def game(tmp_path, monkeypatch):
             with open(self.log_path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(row) + "\n")
 
+        def taken(self, when: datetime, turn: int, leader: str, by: str = "player", poll_s: int = 0) -> None:
+            """A taken log row: the player pressed Start Turn, or (by="claude") Claude took the seat."""
+            row = {"at": when.astimezone().isoformat(timespec="seconds"), "turn": turn, "leader": leader,
+                   "player": NAMES.get(leader, "Xi"), "by": by, "poll_s": poll_s}
+            with open(turn_logger.taken_log_path(self.log_path), "a", encoding="utf-8") as f:
+                f.write(json.dumps(row) + "\n")
+
         def _file(self, folder: Path, name: str, when: datetime) -> None:
             folder.mkdir(parents=True, exist_ok=True)
             f = folder / f"{name}.Civ6Save"
@@ -371,3 +378,107 @@ def test_post_sends_the_message(monkeypatch):
     assert sent == [{"channel": turn_report.CHANNEL, "text": "report"}]
     monkeypatch.setattr(turn_report, "build", lambda: "")
     assert turn_report.post(Client()) is False and len(sent) == 1
+
+
+# Play time: from when the turn was taken (the taken log) to its end.
+
+def _taken_day(game) -> None:
+    game.row(at(10), 1, "LEADER_A", poll_s=0)
+    game.taken(at(10, 5), 1, "LEADER_A")  # Ann: 30 min, 25 of play time
+    game.row(at(10, 30), 1, "LEADER_B", poll_s=0)
+    game.taken(at(11, 30), 1, "LEADER_B", by="claude")  # Bob: 1h 05m, Claude took it in 5 min
+    game.taken(at(11, 30), 1, "LEADER_B", by="player")  # (a press after the stand-in that slipped through)
+    game.row(at(11, 35), 1, "LEADER_C", poll_s=0)  # Cy: 10 min, nothing taken (an old row)
+    game.row(at(11, 45), 1, "LEADER_D", poll_s=0)
+    game.taken(at(11, 45, 2), 1, "LEADER_D", poll_s=2)  # Di: 15 min, read up to 2 s late
+    game.row(at(12), 2, "LEADER_A", poll_s=0)
+    game.taken(at(12, 3), 2, "LEADER_A")  # Ann's turn 2: 10 min, 7 of play time
+    game.row(at(12, 10), 2, "LEADER_B", poll_s=0)  # in progress
+
+
+def test_each_turn_gets_when_it_was_taken_and_by_whom(game):
+    _taken_day(game)
+    seq, _ = game.compute()
+    ann, bob, cy, di, ann2, _ = seq
+    assert (ann.taken, ann.claude) == (at(10, 5), False)
+    assert (bob.taken, bob.claude) == (at(11, 30), True)
+    assert (cy.taken, cy.claude) == (None, False)
+    assert di.taken == at(11, 45, 1)  # the middle of its window
+    ends = {(pt.turn, pt.player): end for pt, end in turn_times.finished(seq)}
+    assert turn_times.take_minutes(ann, ends[(1, "Ann")]) == 25
+    assert turn_times.take_minutes(bob, ends[(1, "Bob")]) == 5
+    assert turn_times.take_minutes(cy, ends[(1, "Cy")]) is None
+    assert turn_times.take_minutes(ann2, ends[(2, "Ann")]) == 7
+
+
+def test_a_turn_taken_before_its_estimated_start_counts_from_the_start(game):
+    game.row(at(10), 1, "LEADER_A")  # a 5-minute poll: the start is placed at 9:57:30
+    game.taken(at(9, 56), 1, "LEADER_A", poll_s=2)
+    game.row(at(10, 30), 1, "LEADER_B")
+    seq, _ = game.compute()
+    ann, bob = seq
+    assert ann.taken == ann.start
+    assert turn_times.take_minutes(ann, bob.start) == turn_times.minutes(ann, bob.start)
+
+
+def test_claudes_turns_are_not_the_players_play_time(game):
+    _taken_day(game)
+    seq, _ = game.compute()
+    done = turn_times.finished(seq)
+    averages = {a.player: a for a in turn_times.player_averages(done)}
+    assert (averages["Ann"].taken, averages["Ann"].take_mean_minutes) == (2, 16)
+    assert (averages["Bob"].turns, averages["Bob"].taken, averages["Bob"].take_mean_minutes) == (1, 0, None)
+    assert averages["Bob"].mean_minutes == 65  # the total is still his
+    assert (averages["Cy"].taken, averages["Cy"].take_mean_minutes) == (0, None)
+    assert [pt.player for pt, _ in turn_times.claude_takes(done)] == ["Bob"]
+    assert turn_times.mean_take_minutes(turn_times.claude_takes(done)) == 5
+    assert [pt.player for pt, _ in turn_times.own_takes(done)] == ["Ann", "Di", "Ann"]
+
+
+def test_report_gives_the_play_time(game):
+    _taken_day(game)
+    seq, _ = game.compute()
+    lines = turn_report.message(seq, today=date(2026, 10, 28)).splitlines()
+    di_take = turn_times.hms(14 + 59 / 60)  # from 11:45:01 to 12:00
+    assert lines == [
+        (
+            f"*Turn times* in workday hours ({turn_logger.WORKDAY}), slowest first. "
+            "Play time: from pressing Start Turn to the end of the turn."
+        ),
+        "",
+        f"*Yesterday (Tue 27 Oct): 5 turns, 26m 00s average, play time: {turn_times.hms((25 + 14 + 59 / 60 + 7) / 3)} (3 turns)*",
+        "1. Bob: 1h 05m 00s (1 turn)",
+        "2. Ann: 20m 00s (2 turns), play time: 16m 00s",
+        f"3. Di: 15m 00s (1 turn), play time: {di_take}",
+        "4. Cy: 10m 00s (1 turn)",
+        "Claude took 1 turn (Bob), play time: 5m 00s",
+        "",
+        f"*Since Tue 27 Oct: 5 turns, 26m 00s average, play time: {turn_times.hms((25 + 14 + 59 / 60 + 7) / 3)} (3 turns)*",
+        "1. Bob: 1h 05m 00s (1 turn)",
+        "2. Ann: 20m 00s (2 turns), play time: 16m 00s",
+        f"3. Di: 15m 00s (1 turn), play time: {di_take}",
+        "4. Cy: 10m 00s (1 turn)",
+        "Claude took 1 turn (Bob), play time: 5m 00s",
+    ]
+
+
+def test_a_player_with_some_turns_untimed_gets_the_count(game):
+    game.row(at(10), 1, "LEADER_A", poll_s=0)
+    game.row(at(10, 10), 1, "LEADER_B", poll_s=0)
+    game.row(at(10, 20), 1, "LEADER_C", poll_s=0)
+    game.row(at(10, 30), 1, "LEADER_D", poll_s=0)
+    game.row(at(10, 40), 2, "LEADER_A", poll_s=0)
+    game.taken(at(10, 41), 2, "LEADER_A")  # Ann's turn 2: 9 min of play time; turn 1 before the taken log
+    game.row(at(10, 50), 2, "LEADER_B", poll_s=0)
+    seq, _ = game.compute()
+    lines = turn_report.message(seq, today=date(2026, 10, 28)).splitlines()
+    assert lines[3] == "1. Ann: 10m 00s (2 turns), play time: 9m 00s (1 turn)"
+    assert lines[2] == "*Yesterday (Tue 27 Oct): 5 turns, 10m 00s average, play time: 9m 00s (1 turn)*"
+
+
+def test_the_cli_report_has_the_play_time(game):
+    _taken_day(game)
+    seq, skipped = game.compute()
+    text = turn_times.report(seq, skipped, turns=True)
+    assert "taken 11:30:00 by Claude, play time: 5m 00s" in text
+    assert "16m 00s (2)" in text and "Claude" in text

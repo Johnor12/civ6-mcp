@@ -492,3 +492,64 @@ class TestSnapshots:
     def test_a_missing_folder_is_no_snapshot(self, tmp_path):
         assert turn_logger.snapshot_before(_at(1, 17), None, tmp_path / "nowhere") is None
         assert turn_logger.prune_snapshots(tmp_path / "turn_log.jsonl", tmp_path / "nowhere") == 0
+
+
+class TestTaken:
+    """Rows in the taken log, beside the turn log: when each turn was taken, by the player or by Claude."""
+
+    def _rows(self, log):
+        return [json.loads(line) for line in turn_logger.taken_log_path(log).read_text(encoding="utf-8").splitlines()]
+
+    def test_the_first_press_of_each_turn_and_taker(self, tmp_path, game_log):
+        log = tmp_path / "turn_log.jsonl"
+        watch = turn_logger.turn_watch.default()
+        game_log.turn_line(_at(1, 16), 18, "LEADER_CLEOPATRA", "Aaron")
+        game_log.taken_line(_at(1, 16, 2), 18, "LEADER_CLEOPATRA", "Aaron")
+        watch.read()
+        assert turn_logger.log_taken(watch.taken, log) == 1
+        game_log.load()
+        game_log.turn_line(_at(1, 17, 20), 18, "LEADER_CLEOPATRA", "Aaron")  # replayed from its start
+        game_log.taken_line(_at(1, 17, 21), 18, "LEADER_CLEOPATRA", "Aaron")
+        game_log.taken_line(_at(1, 17, 50), 18, "LEADER_CLEOPATRA", "Aaron", why="standin")  # then left to Claude
+        game_log.taken_line(_at(1, 17, 50), 18, "LEADER_CLEOPATRA", "Aaron")
+        watch.read()
+        assert turn_logger.log_taken(watch.taken, log) == 1
+        assert self._rows(log) == [
+            {"at": _at(1, 16, 2).astimezone().isoformat(timespec="seconds"), "turn": 18, "leader": "LEADER_CLEOPATRA",
+             "player": "Aaron", "by": "player", "poll_s": 0},
+            {"at": _at(1, 17, 50).astimezone().isoformat(timespec="seconds"), "turn": 18, "leader": "LEADER_CLEOPATRA",
+             "player": "Aaron", "by": "claude", "poll_s": 0},
+        ]
+        assert turn_logger.taken_log_path(log) == tmp_path / "taken_log.jsonl"
+        assert [(r.at, r.key, r.by) for r in turn_logger.read_taken(log)] == [
+            (_at(1, 16, 2), (18, "LEADER_CLEOPATRA", "Aaron"), "player"),
+            (_at(1, 17, 50), (18, "LEADER_CLEOPATRA", "Aaron"), "claude"),
+        ]
+
+    def test_a_restart_adds_nothing(self, tmp_path, game_log):
+        log = tmp_path / "turn_log.jsonl"
+        game_log.turn_line(_at(1, 16), 18, "LEADER_CLEOPATRA", "Aaron")
+        game_log.taken_line(_at(1, 16, 2), 18, "LEADER_CLEOPATRA", "Aaron")
+        for _ in range(2):  # the logger, then the logger restarted
+            watch = turn_logger.turn_watch.TurnWatch(game_log.path)
+            watch.read()
+            turn_logger.log_taken(watch.taken, log)
+        assert len(self._rows(log)) == 1
+
+    def test_the_loop_writes_the_taken_log(self, tmp_path, monkeypatch, game_log):
+        _, saves, log = TestPoll()._game(tmp_path, monkeypatch)
+        watch = turn_logger.turn_watch.default()
+        started = datetime.now().replace(microsecond=0) - timedelta(minutes=5)
+        game_log.turn_line(started, 6, "LEADER_GITARJA", "Heldi", slot=3)
+        turn_logger.tick(watch, 0.0, log, saves, now=100.0)
+        game_log.taken_line(started + timedelta(minutes=2), 6, "LEADER_GITARJA", "Heldi", slot=3, why="standin")
+        game_log.start_turn(3)  # Claude's press, with a copy of the mod from before "play" lines
+        assert turn_logger.tick(watch, 1e9, log, saves, now=101.0) == 1e9  # no poll for it
+        (row,) = turn_logger.read_taken(log)
+        assert (row.at, row.key, row.by, row.poll_s) == (started + timedelta(minutes=2), HELDI_6, "claude", 0)
+        assert watch.taken == []
+
+    def test_a_bad_row_is_skipped(self, tmp_path):
+        log = tmp_path / "turn_log.jsonl"
+        turn_logger.taken_log_path(log).write_text('{"at": "nope"}\n', encoding="utf-8")
+        assert turn_logger.read_taken(log) == []

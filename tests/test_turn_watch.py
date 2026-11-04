@@ -180,3 +180,64 @@ def test_a_load_that_never_finished_marks_nothing(game_log):
     game_log.load(menu=False)  # a later load by the tooling is not taken for a menu pick
     game_log.turn_line(T0.replace(minute=55), 18, "LEADER_NZINGA_MBANDE", "Aidan", slot=1)
     assert watch.read()[0].reload.menu is False
+
+
+# Turns being taken: Start Turn pressed, or Claude taking the seat.
+
+def test_parse_a_press_and_a_stand_in():
+    line = f"MCPBridge_InGame: MCPB|0|T|{int(T0.timestamp())}|18|1|LEADER_NZINGA_MBANDE|Aidan|play"
+    assert turn_watch.parse_taken(line) == turn_watch.TurnTaken(T0, 18, "LEADER_NZINGA_MBANDE", "Aidan", "player")
+    assert turn_watch.parse(line) is None  # not a turn starting
+    wrapped = f"MCPBridge_InGame: MCPB|1793740441034|O|MCPB|0|T|{int(T0.timestamp())}|18|1|LEADER_NZINGA_MBANDE|Aidan|standin"
+    assert turn_watch.parse_taken(wrapped).by == turn_watch.CLAUDE
+    assert turn_watch.parse_taken(f"MCPBridge_InGame: MCPB|0|T|{int(T0.timestamp())}|18|1|L|Aidan|begin") is None
+
+
+def test_the_mods_press_line_gives_the_exact_time(game_log):
+    watch = TurnWatch(game_log.path)
+    game_log.turn_line(T0, 18, "LEADER_CLEOPATRA", "Aaron")
+    game_log.taken_line(T0.replace(minute=25), 18, "LEADER_CLEOPATRA", "Aaron")
+    game_log.start_turn(0)  # the game's own line for the same press
+    assert [s.player for s in watch.read()] == ["Aaron"]
+    assert watch.taken == [turn_watch.TurnTaken(T0.replace(minute=25), 18, "LEADER_CLEOPATRA", "Aaron", "player")]
+
+
+def test_a_press_after_a_stand_in_is_claudes(game_log):
+    watch = TurnWatch(game_log.path)
+    game_log.turn_line(T0, 18, "LEADER_CLEOPATRA", "Aaron")
+    watch.read()
+    game_log.taken_line(T0.replace(minute=25), 18, "LEADER_CLEOPATRA", "Aaron", why="standin")
+    game_log.taken_line(T0.replace(minute=25), 18, "LEADER_CLEOPATRA", "Aaron")
+    game_log.start_turn(0)
+    watch.read()
+    assert [(t.at, t.by, t.late_s) for t in watch.taken] == [
+        (T0.replace(minute=25), "claude", 0), (T0.replace(minute=25), "claude", 0)
+    ]
+    watch.taken.clear()
+    game_log.start_turn(0)  # end_turn taking the seat back after an interrupted end of turn
+    watch.read()
+    assert [t.by for t in watch.taken] == ["claude"]
+
+
+def test_without_the_mods_line_the_games_is_timed_by_the_read(game_log, monkeypatch):
+    clock = iter([T0.timestamp(), T0.timestamp() + 1.4])
+    monkeypatch.setattr(turn_watch.time, "time", lambda: next(clock))
+    watch = TurnWatch(game_log.path)
+    game_log.turn_line(T0, 18, "LEADER_CLEOPATRA", "Aaron")
+    watch.read()
+    game_log.start_turn(1)  # another slot: not this turn's
+    game_log.start_turn(0)
+    watch.read()
+    (taken,) = watch.taken
+    assert (taken.at, taken.key, taken.by, taken.late_s) == (T0.replace(second=6), AARON_18, "player", 2)
+
+
+def test_the_first_read_cannot_time_the_games_line(game_log):
+    game_log.turn_line(T0, 18, "LEADER_CLEOPATRA", "Aaron")
+    game_log.start_turn(0)  # pressed while nothing was watching
+    watch = TurnWatch(game_log.path)
+    watch.read()
+    assert watch.taken == []
+    game_log.load()
+    game_log.turn_line(T0.replace(minute=50), 18, "LEADER_CLEOPATRA", "Aaron", why="load")
+    assert watch.read()[0].reload.had_started is True  # still counts for the reload log

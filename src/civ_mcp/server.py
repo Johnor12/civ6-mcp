@@ -213,6 +213,10 @@ async def begin_standin_turn(ctx: Context, leader: str, note: str = "") -> str:
         )
     if not st.turn_active:
         return f"Cannot begin: {lid}'s turn is not active (already ended?)."
+    try:  # before Start Turn, so the turn logger counts the press as Claude's
+        await _hotseat.mark_standin(s.conn)
+    except Exception:  # the turn times lose a mark; the seat is still taken
+        log.warning("could not mark the stand-in in Lua.log", exc_info=True)
     if st.player_change_visible:
         st = await _hotseat.accept_turn(s.conn)
 

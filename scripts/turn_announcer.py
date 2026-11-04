@@ -25,7 +25,9 @@ failure it waits RETRY_S before trying again.
   so a mention by anyone counts. The message ends with every turn finished
   since the bot last posted in the channel and how long each took, in
   workday time, from scripts/turn_times.py (the daily report's figures), so
-  the turns that got a hand ping are accounted for too. Without a post of
+  the turns that got a hand ping are accounted for too. A turn with a play
+  time (from Start Turn to its end) has it in brackets, marked when
+  Claude took the turn. Without a post of
   its own in the last LOOKBACK_S, the turns of that stretch are listed.
 - After REMINDER_S of workday time: a reminder from the bot.
 - After turn_logger.TURN_LIMIT_S: a last message from the bot, saying any
@@ -178,11 +180,21 @@ def mentioned(client, slack_id: str, since: datetime, from_bot: bool) -> bool:
             return False
 
 
-def recent_turns(client, now: datetime) -> str:
-    """' Since my last post: Heldi 30m 00s, Randy 10m 12s.' for the turns finished since the bot last posted; '' for none.
+def _recent(pt: turn_times.PlayerTurn, end: datetime) -> str:
+    """'Heldi 30m 00s (play time: 10m 00s)', 'Randy 1h 05m 00s (Claude, play time: 4m 10s)' or just 'Cy 5m 00s'."""
+    text = f"{pt.player} {turn_times.hms(turn_times.minutes(pt, end))}"
+    take = turn_times.take_minutes(pt, end)
+    if take is not None:
+        text += f" ({'Claude, ' if pt.claude else ''}play time: {turn_times.hms(take)})"
+    return text
 
-    The turns and their minutes of workday time come from turn_times, the
-    daily report's figures, so the two agree. The bot's last post is looked
+
+def recent_turns(client, now: datetime) -> str:
+    """' Since my last post: Heldi 30m 00s (play time: 10m 00s), Randy 10m 12s.' for the turns finished since; '' for none.
+
+    The turns and their minutes of workday time (each listed as _recent
+    gives it) come from turn_times, the daily report's figures, so the two
+    agree. The bot's last post is looked
     for LOOKBACK_S back; without one, the turns of that stretch are listed.
     Never raises: a failure is logged and the message goes out without the
     list.
@@ -197,9 +209,7 @@ def recent_turns(client, now: datetime) -> str:
         return ""
     if not done:
         return ""
-    return " Since my last post: " + ", ".join(
-        f"{pt.player} {turn_times.hms(turn_times.minutes(pt, end))}" for pt, end in done
-    ) + "."
+    return " Since my last post: " + ", ".join(_recent(pt, end) for pt, end in done) + "."
 
 
 def last_own_post(client, floor: datetime) -> datetime | None:

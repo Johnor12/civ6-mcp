@@ -169,13 +169,18 @@ and what the viewer can do about it), and an invite to
   turn's start, autosaves included, and none named after its turn-change
   screen, `<LEADER> <turn> <year>`), it saves the game as
   `<LEADER> <turn> <year> MCP`, or `... MCP MIDTURN` once the player is
-  playing. The bot and the announcer never save.
+  playing. The bot and the announcer never save. When a turn was actually
+  taken goes into `scripts/data/taken_log.jsonl`: the first press of Start
+  Turn (a line the bridge mod prints) and the moment Claude took the seat
+  (a line `begin_standin_turn` prints before pressing Start Turn itself),
+  so a turn Claude took is told apart from one its player took.
 - **Turn pings and reminders.** `scripts/turn_announcer.py` runs the same
   check every minute and @'s the player whose turn it is in
   #proj-diplomatic-relations: "it's your turn" when the turn begins (unless
   someone already @'d them there since), with every turn finished since
   the bot's last post in the channel and how long each took in workday
-  time; a reminder after 30 minutes of workday time; and after 1 hour a last
+  time, plus its play time (Start Turn to the end of the turn, marked
+  when Claude took it) where the taken log has one; a reminder after 30 minutes of workday time; and after 1 hour a last
   one saying any other player can now have the turn played through the
   bot. The bot calls it right after each of its
   runs, so a turn the bot ended reaches the next player at once; a turn
@@ -185,7 +190,9 @@ and what the viewer can do about it), and an invite to
   #proj-diplomatic-relations at 9:00 every workday: how many turns were
   taken the previous workday, the average turn and every player's average
   that day, then the same since the log began, all in workday time
-  (9:00–17:00 Mon–Fri) and slowest first. `--print` shows the message, `--now` posts
+  (9:00–17:00 Mon–Fri) and slowest first. Beside each average is the play
+  time, from Start Turn to its end; turns Claude took count for
+  the player's total but get a line of their own for the play time. `--print` shows the message, `--now` posts
   it at once. The figures come from `scripts/turn_times.py`, which
   rebuilds every player-turn since the log began from the seat order,
   fills in the players a poll skipped (every 5 minutes until 29 Oct 2026,
