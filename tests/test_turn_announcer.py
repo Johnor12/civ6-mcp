@@ -186,8 +186,9 @@ class TestRecentTurns:
         _turn(_at(1, 10, 50), player="John", leader="LEADER_LIME_THULE_DAVE")
         assert _check(slack, _at(1, 10, 51))
         # Cameron's turn ended on Monday: listed (the last day), but not one of today's turns.
+        # Heldi: Monday 10:00 to Tuesday 10:30 is 8h 30m of workday hours, less Monday's grace period.
         assert slack.posts == [
-            f"<@{JOHN}> it's your turn (today's turns: 3). Since my last post: Heldi 8h 30m 00s, Randy 10m 00s, Hunter 10m 00s."
+            f"<@{JOHN}> it's your turn (today's turns: 3). Since my last post: Heldi 8h 00m 00s, Randy 10m 00s, Hunter 10m 00s."
         ]
 
     def test_a_seat_turn_times_does_not_know_does_not_stop_the_ping(self, slack, caplog):

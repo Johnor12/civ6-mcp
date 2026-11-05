@@ -87,7 +87,12 @@ class TestWorkdayHours:
         assert turn_logger.workday_seconds(_at(0, 10), _at(0, 11, 30)) == 90 * 60
 
     def test_clipped_to_nine_to_five(self):
-        assert turn_logger.workday_seconds(_at(0, 7), _at(0, 20)) == 8 * 3600
+        assert turn_logger.workday_seconds(_at(0, 7), _at(0, 20)) == 7.5 * 3600
+
+    def test_grace_period_does_not_count(self):
+        assert turn_logger.workday_seconds(_at(0, 12), _at(0, 13)) == 30 * 60
+        assert turn_logger.workday_seconds(_at(0, 12, 15), _at(0, 12, 45)) == 0
+        assert turn_logger.workday_seconds(_at(0, 12, 20), _at(0, 12, 50)) == 5 * 60
 
     def test_overnight_counts_only_working_hours(self):
         assert turn_logger.workday_seconds(_at(0, 16), _at(1, 10)) == 2 * 3600
@@ -113,8 +118,14 @@ class TestWorkdayHours:
         assert turn_logger.workday_deadline(_at(4, 16, 30), 2 * 3600) == _at(7, 10, 30)
         assert turn_logger.workday_deadline(_at(0, 16), 3600) == _at(0, 17)
 
+    def test_deadline_skips_the_grace_period(self):
+        assert turn_logger.workday_deadline(_at(0, 12), 3600) == _at(0, 13, 30)
+        assert turn_logger.workday_deadline(_at(0, 11, 15), 3600) == _at(0, 12, 15)
+        assert turn_logger.workday_deadline(_at(0, 12, 30), 0) == _at(0, 12, 45)
+        assert turn_logger.workday_deadline(_at(0, 12, 30), 1800) == _at(0, 13, 15)
+
     def test_deadline_inverts_workday_seconds(self):
-        for start in (_at(0, 8), _at(2, 13, 17), _at(4, 16, 59), _at(5, 12)):
+        for start in (_at(0, 8), _at(1, 12), _at(1, 12, 30), _at(2, 13, 17), _at(4, 16, 59), _at(5, 12)):
             for seconds in (0, 60, 3600, 7200, 30000):
                 assert turn_logger.workday_seconds(start, turn_logger.workday_deadline(start, seconds)) == seconds
 
@@ -124,6 +135,13 @@ class TestWorkdayHours:
         assert not turn_logger.is_workday(_at(0, 8, 59))
         assert not turn_logger.is_workday(_at(0, 17))
         assert not turn_logger.is_workday(_at(5, 12))
+        assert turn_logger.is_workday(_at(0, 12, 14))
+        assert not turn_logger.is_workday(_at(0, 12, 15))
+        assert not turn_logger.is_workday(_at(0, 12, 44))
+        assert turn_logger.is_workday(_at(0, 12, 45))
+
+    def test_workday_text_names_the_grace_period(self):
+        assert turn_logger.WORKDAY == "9:00–12:15, 12:45–17:00, Mon–Fri"
 
 
 class TestRecords:
@@ -178,7 +196,7 @@ class TestDurationOfCurrentTurn:
         turn_logger.record(63, "LEADER_BARBAROSSA", "Aidan", _at(0, 15), path)
         rec, worked = turn_logger.duration_of_current_turn(_at(0, 16), path)
         assert rec.key == (63, "LEADER_BARBAROSSA", "Aidan") and rec.at == _at(0, 11)
-        assert worked == 5 * 3600
+        assert worked == 4.5 * 3600  # 11:00 to 16:00 less the grace period
 
 
 class TestSaveOfTurn:

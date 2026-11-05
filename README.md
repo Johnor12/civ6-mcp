@@ -121,7 +121,8 @@ only decides who may do what; what a message means is up to Claude.
   since the other players read the channel.
 - **Someone else's turn: DM or mention the bot.** You get whose turn it is
   and how long it has lasted. Once that is 1 hour of workday time
-  (9:00–17:00, Mon–Fri), the reply has a "Play Cameron's turn" button;
+  (9:00–17:00, Mon–Fri, not counting the 12:15–12:45 grace period), the
+  reply has a "Play Cameron's turn" button;
   clicking it (and confirming) has Claude play the turn from a fixed
   prompt. Nothing you wrote reaches Claude. The absent player gets the
   progress and Claude's report by DM; you only hear whose turn it is
@@ -193,7 +194,7 @@ and what the viewer can do about it), and an invite to
   #proj-diplomatic-relations at 9:00 every workday: how many turns were
   taken the previous workday, the average turn and every player's average
   that day, then the same since the log began, all in workday time
-  (9:00–17:00 Mon–Fri) and slowest first. Beside each average is the play
+  (9:00–17:00 Mon–Fri, less the 12:15–12:45 grace period) and slowest first. Beside each average is the play
   time, from Start Turn to its end; turns Claude took count for
   the player's total but get a line of their own for the play time. `--print` shows the message, `--now` posts
   it at once. The figures come from `scripts/turn_times.py`, which

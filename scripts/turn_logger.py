@@ -77,7 +77,7 @@ import logging
 import sys
 import time
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from datetime import time as clock
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -106,10 +106,14 @@ SCREEN_POLL_S = 2  # how late a row is when a turn-change screen line set off it
 SAVE_LOOKBACK_S = 60  # how late a row from before poll_s can be, for the saves that count as its turn's
 MIDTURN_SAVE_TAG = f"{hotseat.SAVE_TAG} MIDTURN"  # a save taken after the player pressed Start Turn
 
-# Workday hours, local time, Monday to Friday.
+# Workday hours, local time, Monday to Friday. The grace period (lunch) inside
+# them counts as outside work hours: turn clocks, deadlines and totals skip it.
 WORKDAY_START_HOUR = 9
 WORKDAY_END_HOUR = 17
-WORKDAY = f"{WORKDAY_START_HOUR}:00–{WORKDAY_END_HOUR}:00, Mon–Fri"
+GRACE_START = clock(12, 15)
+GRACE_END = clock(12, 45)
+WORKDAY_SPANS = ((clock(WORKDAY_START_HOUR), GRACE_START), (GRACE_END, clock(WORKDAY_END_HOUR)))
+WORKDAY = ", ".join(f"{a.hour}:{a.minute:02d}–{b.hour}:{b.minute:02d}" for a, b in WORKDAY_SPANS) + ", Mon–Fri"
 TURN_LIMIT_S = 3600  # workday time after which another player may have a turn played
 
 
@@ -598,18 +602,23 @@ def duration_of_current_turn(
     return first, workday_seconds(first.at, now or datetime.now())
 
 
+def _workday_spans(day: date) -> list[tuple[datetime, datetime]]:
+    """`day`'s stretches of workday time (WORKDAY_SPANS), in order; none at the weekend."""
+    if day.weekday() >= 5:
+        return []
+    return [(datetime.combine(day, a), datetime.combine(day, b)) for a, b in WORKDAY_SPANS]
+
+
 def is_workday(dt: datetime) -> bool:
-    return dt.weekday() < 5 and WORKDAY_START_HOUR <= dt.hour < WORKDAY_END_HOUR
+    return any(opens <= dt < closes for opens, closes in _workday_spans(dt.date()))
 
 
 def workday_seconds(start: datetime, end: datetime) -> float:
-    """Seconds between two naive local times that fall in workday hours."""
+    """Seconds between two naive local times that fall in workday hours (not the grace period)."""
     total = 0.0
     day = start.date()
     while day <= end.date():
-        if day.weekday() < 5:
-            opens = datetime.combine(day, clock(WORKDAY_START_HOUR))
-            closes = datetime.combine(day, clock(WORKDAY_END_HOUR))
+        for opens, closes in _workday_spans(day):
             total += max(0.0, (min(end, closes) - max(start, opens)).total_seconds())
         day += timedelta(days=1)
     return total
@@ -619,9 +628,9 @@ def workday_deadline(start: datetime, seconds: float) -> datetime:
     """The naive local time at which `seconds` of workday time since `start` are up."""
     day = start.date()
     while True:
-        if day.weekday() < 5:
-            opens = max(start, datetime.combine(day, clock(WORKDAY_START_HOUR)))
-            open_s = (datetime.combine(day, clock(WORKDAY_END_HOUR)) - opens).total_seconds()
+        for opens, closes in _workday_spans(day):
+            opens = max(start, opens)
+            open_s = (closes - opens).total_seconds()
             if seconds <= open_s:
                 return opens + timedelta(seconds=seconds)
             seconds -= max(0.0, open_s)
