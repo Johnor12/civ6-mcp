@@ -279,16 +279,21 @@ def test_report_message_has_yesterday_then_everything(game):
     seq, _ = game.compute()
     text = turn_report.message(seq, today=date(2026, 10, 29))  # a Thursday
     assert text.splitlines() == [
-        f"*Turn times* in workday hours ({turn_logger.WORKDAY}), slowest first.",
+        "*Yesterday (Wed 28 Oct):*",
+        "3 turns (new record! Previous: 1, Tue 27 Oct)",
+        "23m 20s average turn time",
         "",
-        "*Yesterday (Wed 28 Oct): 3 turns, 23m 20s average*",
-        "3 turns taken, a new record! Previous record: 1 (Tue 27 Oct)",
+        "_Average turn time, slowest first:_",
         "1. Cy: 30m 00s (1 turn)",
         "2. Bob: 20m 00s (1 turn)",
         "3. Di: 20m 00s (1 turn)",
         "No turn: Ann",
         "",
-        "*Since Tue 27 Oct: 4 turns, 20m 00s average*",
+        "*All turns since Tue 27 Oct:*",
+        "4 turns",
+        "20m 00s average turn time",
+        "",
+        "_Average turn time, slowest first:_",
         "1. Cy: 30m 00s (1 turn)",
         "2. Bob: 20m 00s (1 turn)",
         "3. Di: 20m 00s (1 turn)",
@@ -302,16 +307,23 @@ def test_report_counts_each_players_turns(game):
     game.row(at(24 + 10, 20), 2, "LEADER_C")  # Bob's turn 2: 5 min on Wednesday; Cy's turn 2 in progress
     seq, _ = game.compute()
     lines = turn_report.message(seq, today=date(2026, 10, 29)).splitlines()
-    assert lines[2:8] == [
-        "*Yesterday (Wed 28 Oct): 5 turns, 18m 00s average*",
-        "5 turns taken, a new record! Previous record: 1 (Tue 27 Oct)",
+    assert lines[:9] == [
+        "*Yesterday (Wed 28 Oct):*",
+        "5 turns (new record! Previous: 1, Tue 27 Oct)",
+        "18m 00s average turn time",
+        "",
+        "_Average turn time, slowest first:_",
         "1. Cy: 30m 00s (1 turn)",
         "2. Di: 20m 00s (1 turn)",
         "3. Ann: 15m 00s (1 turn)",
         "4. Bob: 12m 30s (2 turns)",  # 20 min, then 5 min
     ]
-    assert lines[9:] == [
-        "*Since Tue 27 Oct: 6 turns, 16m 40s average*",
+    assert lines[10:] == [
+        "*All turns since Tue 27 Oct:*",
+        "6 turns",
+        "16m 40s average turn time",
+        "",
+        "_Average turn time, slowest first:_",
         "1. Cy: 30m 00s (1 turn)",
         "2. Di: 20m 00s (1 turn)",
         "3. Ann: 12m 30s (2 turns)",  # 10 min, then 15 min
@@ -326,23 +338,50 @@ def test_report_gives_seconds(game):
     game.row(at(10, 11, 30), 1, "LEADER_C", poll_s=0)  # Bob: 7m 07s; Cy's turn in progress
     seq, _ = game.compute()
     lines = turn_report.message(seq, today=date(2026, 10, 28)).splitlines()
-    assert lines[2:5] == [
-        "*Yesterday (Tue 27 Oct): 2 turns, 5m 45s average*",
-        "1. Bob: 7m 07s (1 turn)",
-        "2. Ann: 4m 23s (1 turn)",
-    ]
+    assert lines[:3] == ["*Yesterday (Tue 27 Oct):*", "2 turns", "5m 45s average turn time"]
+    assert lines[4:7] == ["_Average turn time, slowest first:_", "1. Bob: 7m 07s (1 turn)", "2. Ann: 4m 23s (1 turn)"]
 
 
 def test_monday_report_covers_friday(game):
     _week(game)
     seq, _ = game.compute()
     lines = turn_report.message(seq, today=date(2026, 11, 2)).splitlines()  # a Monday
-    assert lines[2:4] == ["*Friday 30 Oct: 0 turns*", "0 turns taken. Record: 3 (Wed 28 Oct)"]
-    assert lines[4:6] == ["", "*Since Tue 27 Oct: 4 turns, 20m 00s average*"]
+    assert lines[:4] == ["*Friday 30 Oct:*", "0 turns (record: 3, Wed 28 Oct)", "", "*All turns since Tue 27 Oct:*"]
+
+
+def test_workday_of():
+    wednesday = TUESDAY + timedelta(days=1)
+    assert turn_times.workday_of(wednesday + timedelta(hours=9)) == date(2026, 10, 28)
+    assert turn_times.workday_of(wednesday + timedelta(hours=23, minutes=59)) == date(2026, 10, 28)
+    assert turn_times.workday_of(wednesday + timedelta(hours=8, minutes=59)) == date(2026, 10, 27)  # overnight
+    assert turn_times.workday_of(datetime(2026, 10, 31, 12)) == date(2026, 10, 30)  # Saturday: Friday
+    assert turn_times.workday_of(datetime(2026, 11, 2, 8, 30)) == date(2026, 10, 30)  # Monday morning: Friday
+    assert turn_times.workday_of(datetime(2026, 11, 2, 9)) == date(2026, 11, 2)
+
+
+def test_a_turn_finished_overnight_counts_for_the_day_before(game):
+    game.row(at(16, 35), 1, "LEADER_A", poll_s=0)  # Ann's turn begins Tuesday afternoon
+    game.taken(at(24 + 8, 32), 1, "LEADER_A")  # she plays it at 8:32 Wednesday
+    game.row(at(24 + 8, 46), 1, "LEADER_B", poll_s=0)  # and ends it at 8:46, before the workday
+    game.taken(at(24 + 8, 57), 1, "LEADER_B")
+    game.row(at(24 + 8, 58), 1, "LEADER_C", poll_s=0)  # Bob ends his at 8:58: Tuesday's too
+    game.row(at(24 + 9, 30), 1, "LEADER_D", poll_s=0)  # Cy's, ending at 9:30, is Wednesday's
+    seq, _ = game.compute()
+    assert [pt.player for pt, _ in turn_times.ended_on(seq, date(2026, 10, 27))] == ["Ann", "Bob"]
+    assert [pt.player for pt, _ in turn_times.ended_on(seq, date(2026, 10, 28))] == ["Cy"]
+    assert turn_times.turns_per_day(seq) == {date(2026, 10, 27): 2, date(2026, 10, 28): 1}
+    lines = turn_report.message(seq, today=date(2026, 10, 28)).splitlines()
+    assert lines[:5] == [
+        "*Yesterday (Tue 27 Oct):*",
+        "2 turns",
+        "12m 30s average turn time",  # Ann 16:35 to 17:00, Bob none
+        "7m 30s average play time",  # Ann 14 min, Bob 1 min
+        "15m 00s total play time",
+    ]
 
 
 def test_report_holds_the_day_against_the_record(game):
-    # Turns ending on Tue 27: 2, Wed 28: 3, Thu 29: 3, Sat 31: 5, Mon 02: 1; the last turn is in progress.
+    # Turns ending on Tue 27: 2, Wed 28: 3, Thu 29: 3, Sat 31: 5 (Friday's), Mon 02: 1; the last is in progress.
     k = 0
     for days, rows in ((0, 3), (1, 3), (2, 3), (4, 5), (6, 1)):
         for i in range(rows):
@@ -351,17 +390,18 @@ def test_report_holds_the_day_against_the_record(game):
     seq, _ = game.compute()
     assert turn_times.turns_per_day(seq) == {
         date(2026, 10, 27): 2, date(2026, 10, 28): 3, date(2026, 10, 29): 3,
-        date(2026, 10, 31): 5, date(2026, 11, 2): 1,
+        date(2026, 10, 30): 5, date(2026, 11, 2): 1,
     }
 
-    def record_line(today: date) -> str:
-        return turn_report.message(seq, today=today).splitlines()[3]
+    def turns_line(today: date) -> str:
+        return turn_report.message(seq, today=today).splitlines()[1]
 
-    assert record_line(date(2026, 10, 28)).startswith("1. ")  # the first day has no record to hold
-    assert record_line(date(2026, 10, 29)) == "3 turns taken, a new record! Previous record: 2 (Tue 27 Oct)"
-    assert record_line(date(2026, 10, 30)) == "3 turns taken, tying the record (Wed 28 Oct)"
-    # Saturday's 5 never counts: the report covers workdays only.
-    assert record_line(date(2026, 11, 3)) == "1 turn taken. Record: 3 (Wed 28 Oct)"
+    assert turns_line(date(2026, 10, 28)) == "2 turns"  # the first day has no record to hold
+    assert turns_line(date(2026, 10, 29)) == "3 turns (new record! Previous: 2, Tue 27 Oct)"
+    assert turns_line(date(2026, 10, 30)) == "3 turns (ties the record, Wed 28 Oct)"
+    # Saturday's turns count for Friday.
+    assert turns_line(date(2026, 11, 2)) == "5 turns (new record! Previous: 3, Wed 28 Oct)"
+    assert turns_line(date(2026, 11, 3)) == "1 turn (record: 5, Fri 30 Oct)"
 
 
 def test_previous_workday():
@@ -475,28 +515,24 @@ def test_report_gives_the_play_time(game):
     seq, _ = game.compute()
     lines = turn_report.message(seq, today=date(2026, 10, 28)).splitlines()
     di_take = turn_times.hms(14 + 59 / 60)  # from 11:45:01 to 12:00
-    assert lines == [
-        (
-            f"*Turn times* in workday hours ({turn_logger.WORKDAY}), slowest first. "
-            "Play time: from pressing Start Turn to the end of the turn, at any hour."
-        ),
+    section = [
+        "5 turns",
+        "26m 00s average turn time",
+        f"{turn_times.hms((25 + 14 + 59 / 60 + 7) / 3)} average play time",  # Ann 25 + 7, Di 14:59; not Claude's 5
+        "46m 59s total play time",
         "",
-        f"*Yesterday (Tue 27 Oct): 5 turns, 26m 00s average, {turn_times.hms((25 + 14 + 59 / 60 + 7) / 3)} average play time (3 turns)*",
-        "Total play time: 46m 59s (3 turns)",  # Ann 25 + 7, Di 14:59; not Claude's 5
+        "_Average turn time, slowest first:_",
         "1. Bob: 1h 05m 00s (1 turn)",
-        "2. Ann: 20m 00s (2 turns), play time: 16m 00s",
-        f"3. Di: 15m 00s (1 turn), play time: {di_take}",
+        "2. Ann: 20m 00s (2 turns)",
+        "3. Di: 15m 00s (1 turn)",
         "4. Cy: 10m 00s (1 turn)",
-        "Claude took 1 turn (Bob), play time: 5m 00s",
         "",
-        f"*Since Tue 27 Oct: 5 turns, 26m 00s average, {turn_times.hms((25 + 14 + 59 / 60 + 7) / 3)} average play time (3 turns)*",
-        "Total play time: 46m 59s (3 turns)",
-        "1. Bob: 1h 05m 00s (1 turn)",
-        "2. Ann: 20m 00s (2 turns), play time: 16m 00s",
-        f"3. Di: 15m 00s (1 turn), play time: {di_take}",
-        "4. Cy: 10m 00s (1 turn)",
+        "_Average play time, slowest first:_",
+        "1. Ann: 16m 00s",
+        f"2. Di: {di_take}",
         "Claude took 1 turn (Bob), play time: 5m 00s",
     ]
+    assert lines == ["*Yesterday (Tue 27 Oct):*", *section, "", "*All turns since Tue 27 Oct:*", *section]
 
 
 def test_a_player_with_some_turns_untimed_gets_the_count(game):
@@ -509,12 +545,12 @@ def test_a_player_with_some_turns_untimed_gets_the_count(game):
     game.row(at(10, 50), 2, "LEADER_B", poll_s=0)
     seq, _ = game.compute()
     lines = turn_report.message(seq, today=date(2026, 10, 28)).splitlines()
-    assert lines[2] == "*Yesterday (Tue 27 Oct): 5 turns, 10m 00s average, 9m 00s average play time (1 turn)*"
-    assert lines[3] == "Total play time: 9m 00s (1 turn)"
-    assert lines[4] == "1. Ann: 10m 00s (2 turns), play time: 9m 00s (1 turn)"
+    assert lines[1:5] == ["5 turns", "10m 00s average turn time", "9m 00s average play time", "9m 00s total play time"]
+    assert lines[6:8] == ["_Average turn time, slowest first:_", "1. Ann: 10m 00s (2 turns)"]
+    assert lines[lines.index("_Average play time, slowest first:_") + 1] == "1. Ann: 9m 00s (1 turn)"
 
 
-def test_total_play_time_covers_each_section_and_the_record_comes_first(game):
+def test_each_section_opens_with_its_figures(game):
     game.row(at(16), 1, "LEADER_A", poll_s=0)
     game.taken(at(16, 10), 1, "LEADER_A")  # Ann: 30 min on Tuesday, 20 of play time
     game.row(at(16, 30), 1, "LEADER_B", poll_s=0)
@@ -523,19 +559,23 @@ def test_total_play_time_covers_each_section_and_the_record_comes_first(game):
     game.row(at(24 + 9, 20), 1, "LEADER_D", poll_s=0)  # Di's turn in progress
     seq, _ = game.compute()
     lines = turn_report.message(seq, today=date(2026, 10, 29)).splitlines()
-    assert lines[2:5] == [
-        "*Yesterday (Wed 28 Oct): 2 turns, 25m 00s average, 8m 00s average play time (1 turn)*",
-        "2 turns taken, a new record! Previous record: 1 (Tue 27 Oct)",
-        "Total play time: 8m 00s (1 turn)",
+    assert lines[:5] == [
+        "*Yesterday (Wed 28 Oct):*",
+        "2 turns (new record! Previous: 1, Tue 27 Oct)",
+        "25m 00s average turn time",
+        "8m 00s average play time",
+        "8m 00s total play time",
     ]
-    since = lines.index("*Since Tue 27 Oct: 3 turns, 26m 40s average, 14m 00s average play time (2 turns)*")
-    assert lines[since + 1] == "Total play time: 28m 00s (2 turns)"
+    since = lines.index("*All turns since Tue 27 Oct:*")
+    assert lines[since + 1:since + 5] == [
+        "3 turns", "26m 40s average turn time", "14m 00s average play time", "28m 00s total play time",
+    ]
 
 
-def test_no_total_play_time_without_a_timed_turn(game):
+def test_no_play_time_without_a_timed_turn(game):
     _week(game)
     seq, _ = game.compute()
-    assert not any(line.startswith("Total play time") for line in turn_report.message(seq, today=date(2026, 10, 29)).splitlines())
+    assert not any("play time" in line for line in turn_report.message(seq, today=date(2026, 10, 29)).splitlines())
 
 
 def test_the_cli_report_has_the_play_time(game):

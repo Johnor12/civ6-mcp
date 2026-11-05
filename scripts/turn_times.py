@@ -340,16 +340,33 @@ def finished(seq: list[PlayerTurn]) -> list[tuple[PlayerTurn, datetime]]:
     return [(pt, nxt.start) for pt, nxt in zip(seq, seq[1:])]
 
 
+def workday_of(when: datetime) -> date:
+    """The workday a moment counts towards: the last weekday whose workday had begun by then.
+
+    Overnight, until the next workday begins (turn_logger.WORKDAY_START_HOUR),
+    and over the weekend, it is still the workday before: a turn that ends
+    at 8:46 on Thursday is Wednesday's, one that ends on Saturday or before
+    9:00 on Monday is Friday's.
+    """
+    day = when.date()
+    if when.hour < turn_logger.WORKDAY_START_HOUR:
+        day -= timedelta(days=1)
+    while day.weekday() >= 5:
+        day -= timedelta(days=1)
+    return day
+
+
 def ended_on(seq: list[PlayerTurn], day: date) -> list[tuple[PlayerTurn, datetime]]:
-    """The finished player-turns whose end fell on `day`."""
-    return [(pt, end) for pt, end in finished(seq) if end.date() == day]
+    """The finished player-turns that count towards workday `day`: those whose end has it as workday_of."""
+    return [(pt, end) for pt, end in finished(seq) if workday_of(end) == day]
 
 
 def turns_per_day(seq: list[PlayerTurn]) -> dict[date, int]:
-    """How many player-turns ended on each day that had one, by the day of their end (as ended_on counts them)."""
+    """How many player-turns each workday that had one counts (as ended_on counts them), by workday_of their end."""
     counts: dict[date, int] = {}
     for _, end in finished(seq):
-        counts[end.date()] = counts.get(end.date(), 0) + 1
+        day = workday_of(end)
+        counts[day] = counts.get(day, 0) + 1
     return counts
 
 

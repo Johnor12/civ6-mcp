@@ -20,10 +20,11 @@ is one it has not dealt with yet, reads the channel back to when it fell
 due. Slack is called a few times per message, never once a second; after a
 failure it waits RETRY_S before trying again.
 
-Every message carries today's turns, how many player-turns have ended
-today, counted as the daily report counts a day's turns against the record
-(turn_times.turns_per_day), so the channel can see how close the day is to
-a new one.
+Every message carries today's turns, how many player-turns the current
+workday counts so far, as the daily report counts a day's turns against the
+record (turn_times.turns_per_day), so the channel can see how close the day
+is to a new one. Until 9:00, and over the weekend, the current workday is
+the one before: a turn finished overnight adds to its count.
 
 - When the turn begins: "it's your turn", unless someone has @'d the player
   in the channel since. Players ping the next one by hand when they finish,
@@ -210,10 +211,10 @@ def player_turns() -> list[turn_times.PlayerTurn] | None:
 
 
 def todays_turns(seq: list[turn_times.PlayerTurn] | None, now: datetime) -> str:
-    """' (today's turns: 12)': the player-turns that ended on `now`'s day, as the daily report counts them; '' without seq."""
+    """' (today's turns: 12)': the player-turns of `now`'s workday (turn_times.workday_of), as the daily report counts them; '' without seq."""
     if seq is None:
         return ""
-    return f" (today's turns: {turn_times.turns_per_day(seq).get(now.date(), 0)})"
+    return f" (today's turns: {turn_times.turns_per_day(seq).get(turn_times.workday_of(now), 0)})"
 
 
 def recent_turns(client, seq: list[turn_times.PlayerTurn] | None, now: datetime) -> str:
