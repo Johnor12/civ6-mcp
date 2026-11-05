@@ -57,8 +57,9 @@ are deleted after SNAPSHOT_KEEP_S.
 The poll stands in for the Save Game button players are meant to press on
 every turn-change screen and sometimes forget. When the hotseat save
 folder holds no save of the current turn (none written since the turn can
-have begun, autosaves included, and none named after its turn-change
-screen, "<LEADER> <turn> <year>"), it saves the game the way end_turn
+have begun and none named after its turn-change screen, "<LEADER> <turn>
+<year>"; the game's own autosaves do not count, not even for the first
+seat, whose turn the autosave opens), it saves the game the way end_turn
 does, as "<LEADER> <turn> <year> MCP", or "... MCP MIDTURN" when the
 player had already started playing. Only this script's loop saves;
 log_current_turn, which the bot calls, never does.
@@ -102,7 +103,7 @@ SNAPSHOT_KEEP_S = 7 * 86400  # how long a snapshot no reload log row names is ke
 WATCH_S = 1  # how often the loop reads what Lua.log gained
 POLL_S = 900  # how often it asks the game anyway, in case a turn left no line in Lua.log
 SCREEN_POLL_S = 2  # how late a row is when a turn-change screen line set off its poll: one WATCH_S and the poll
-SAVE_LOOKBACK_S = 60  # how long before a turn's first row the game's autosave of it can be written
+SAVE_LOOKBACK_S = 60  # how late a row from before poll_s can be, for the saves that count as its turn's
 MIDTURN_SAVE_TAG = f"{hotseat.SAVE_TAG} MIDTURN"  # a save taken after the player pressed Start Turn
 
 # Workday hours, local time, Monday to Friday.
@@ -541,23 +542,27 @@ def save_of_turn(
     The turn began after the row before its first row (the game was still
     on the previous player then) and at most the first row's poll_s before
     it (rows from before poll_s: SAVE_LOOKBACK_S, their polls' interval),
-    so any save written since then is one of this turn. An autosave (in an
-    "auto" folder) counts from SAVE_LOOKBACK_S before the first row: the
-    game writes it while a game turn opens, a little before the first
-    seat's turn-change screen shows. A save named the way the game offers
-    it on this turn's Save Game screen (`default_name`, "<LEADER> <turn>
-    <year>", whatever follows it) counts from the previous row on, however
-    late the turn was first logged.
+    so any save written since then is one of this turn. A save named the
+    way the game offers it on this turn's Save Game screen (`default_name`,
+    "<LEADER> <turn> <year>", whatever follows it) counts from the previous
+    row on, however late the turn was first logged.
+
+    The game's own autosaves (in an "auto" folder) never count. The one
+    that opens each game turn is written in the same second as the first
+    seat's turn line, but before the game hands that seat over, so the
+    Load Game list shows it as the last seat's save; the game keeps only
+    the last ten, and a load can write it again. The first seat gets a
+    save under its own name like every other seat.
     """
     after_previous = previous.at.timestamp() if previous else float("-inf")
     window = SAVE_LOOKBACK_S if first.poll_s is None else first.poll_s
     begun = max(after_previous, (first.at - timedelta(seconds=window)).timestamp())
-    autosaves_from = max(after_previous, (first.at - timedelta(seconds=max(window, SAVE_LOOKBACK_S))).timestamp())
     prefix = default_name.casefold()
     for f in files:
+        if f.parent.name.casefold() == "auto":
+            continue
         mtime = f.stat().st_mtime
-        since = autosaves_from if f.parent.name.casefold() == "auto" else begun
-        if mtime >= since or (prefix and mtime >= after_previous and f.stem.casefold().startswith(prefix)):
+        if mtime >= begun or (prefix and mtime >= after_previous and f.stem.casefold().startswith(prefix)):
             return f
     return None
 

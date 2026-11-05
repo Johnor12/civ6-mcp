@@ -253,11 +253,11 @@ class TestPoll:
         self._poll(log, saves)
         assert conn.saves_sent() == []
 
-    def test_an_autosave_is_enough(self, tmp_path, monkeypatch):
+    def test_the_games_autosave_is_not_enough(self, tmp_path, monkeypatch):
         conn, saves, log = self._game(tmp_path, monkeypatch)
         _save_file(saves / "auto", "AutoSave_0006", datetime.now() - timedelta(seconds=30))
         self._poll(log, saves)
-        assert conn.saves_sent() == []
+        assert conn.saves_sent() == ["GITARJA 6 3600 BC MCP"]
 
     def test_log_current_turn_never_saves(self, tmp_path, monkeypatch):
         conn, saves, log = self._game(tmp_path, monkeypatch)
@@ -348,14 +348,30 @@ class TestTurnLines:
         turn_logger.tick(watch, 1e9, log, saves, now=0.0)
         assert [(r.key, r.poll_s) for r in turn_logger.read_records(log)][-1] == (HELDI_6, turn_logger.SCREEN_POLL_S)
 
-    def test_after_an_exact_row_only_the_autosave_may_come_first(self, tmp_path):
+    def test_after_an_exact_row_nothing_from_before_it_counts(self, tmp_path):
         # Cameron took 30 seconds, so his own save is newer than SAVE_LOOKBACK_S before Heldi's turn.
         previous = turn_logger.TurnRecord(_at(0, 10, 4) + timedelta(seconds=30), 6, "LEADER_JULIUS_CAESAR", "Cameron", 0)
         first = turn_logger.TurnRecord(_at(0, 10, 5), 6, "LEADER_GITARJA", "Heldi", poll_s=0)
         cameron = _save_file(tmp_path, "JULIUS CAESAR 6 3600 BC MCP", _at(0, 10, 4) + timedelta(seconds=31))
         assert turn_logger.save_of_turn(first, previous, "GITARJA 6 3600 BC", [cameron]) is None
-        autosave = _save_file(tmp_path / "auto", "AutoSave_0006", _at(0, 10, 4) + timedelta(seconds=50))
-        assert turn_logger.save_of_turn(first, previous, "GITARJA 6 3600 BC", [cameron, autosave]) == autosave
+
+    def test_the_autosave_that_opens_the_game_turn_is_not_the_first_seats_save(self, tmp_path):
+        # Turn 22 on 2026-11-05: Kiviuq (last seat) ended at 10:35:01, Aaron's turn line has the same
+        # second, and the game's AutoSave_0022 was written a few ms into it; the Load Game list shows
+        # it as Kiviuq's. Aaron's turn needs a save of its own.
+        previous = turn_logger.TurnRecord(_at(0, 10, 25), 21, "LEADER_LIME_THULE_DAVE", "John", 0)
+        first = turn_logger.TurnRecord(_at(0, 10, 35) + timedelta(seconds=1), 22, "LEADER_CLEOPATRA", "Aaron", 0)
+        name = "CLEOPATRA 22 2320 BC"
+        autosave = _save_file(tmp_path / "auto", "AutoSave_0022", first.at + timedelta(milliseconds=5))
+        later = _save_file(tmp_path / "auto", "AutoSave_0022 again", first.at + timedelta(minutes=5))  # a load writes it again
+        assert turn_logger.save_of_turn(first, previous, name, [autosave, later]) is None
+        own = _save_file(tmp_path, f"{name} MCP", first.at + timedelta(seconds=1))
+        assert turn_logger.save_of_turn(first, previous, name, [autosave, later, own]) == own
+
+    def test_a_quicksave_still_counts(self, tmp_path):
+        first = turn_logger.TurnRecord(_at(0, 10, 5), 6, "LEADER_GITARJA", "Heldi", poll_s=0)
+        quick = _save_file(tmp_path / "quick", "QuickSave", _at(0, 10, 6))
+        assert turn_logger.save_of_turn(first, None, "GITARJA 6 3600 BC", [quick]) == quick
 
     def test_a_row_from_a_long_poll_counts_saves_from_its_whole_window(self, tmp_path):
         first = turn_logger.TurnRecord(_at(0, 10, 5), 6, "LEADER_GITARJA", "Heldi", poll_s=turn_logger.POLL_S)
