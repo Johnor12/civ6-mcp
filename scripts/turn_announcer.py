@@ -31,7 +31,7 @@ a new one.
   since the bot last posted in the channel and how long each took, in
   workday time, from scripts/turn_times.py (the daily report's figures), so
   the turns that got a hand ping are accounted for too. A turn with a play
-  time (from Start Turn to its end) has it in brackets, marked when
+  time (from Start Turn to its end, at any hour) has it in brackets, marked when
   Claude took the turn. Without a post of
   its own in the last LOOKBACK_S, the turns of that stretch are listed.
 - After REMINDER_S of workday time: a reminder from the bot.

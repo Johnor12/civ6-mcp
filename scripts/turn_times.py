@@ -32,8 +32,10 @@ the player's: player_averages leaves it out of the player's play time
 and claude_takes lists it, while its total still counts for the player.
 Turns from before the taken log began have a total only.
 
-Times are minutes of workday time (turn_logger.WORKDAY, what the bot's turn
-limit counts), so a turn held overnight costs nothing. scripts/turn_report.py
+A turn's total is minutes of workday time (turn_logger.WORKDAY, what the
+bot's turn limit counts), so a turn held overnight costs nothing. Play time
+is minutes at any hour: a turn taken at 8:30 and finished at 8:45 has 15
+minutes of play time though its total has none. scripts/turn_report.py
 posts player_averages() in the game channel every workday morning, and
 scripts/turn_announcer.py lists the turns finished since its last post when
 it pings the next player. Standard library only; turn_logger and civ_mcp
@@ -127,7 +129,7 @@ class PlayerTurn:
 
 @dataclass(frozen=True)
 class PlayerAverage:
-    """One player's finished turns, in minutes of workday time."""
+    """One player's finished turns: totals in minutes of workday time, play time in minutes at any hour."""
 
     player: str
     leader: str
@@ -367,10 +369,14 @@ def mean_minutes(done: list[tuple[PlayerTurn, datetime]]) -> float:
 
 
 def take_minutes(pt: PlayerTurn, end: datetime) -> float | None:
-    """A finished turn's play time, from when it was taken to its end, in minutes of workday time; None if unknown."""
+    """A finished turn's play time, from when it was taken to its end, in minutes at any hour; None if unknown.
+
+    Unlike the total (minutes), it is not limited to the workday: playing
+    before 9:00 or after 17:00 is still playing.
+    """
     if pt.taken is None:
         return None
-    return turn_logger.workday_seconds(min(pt.taken, end), end) / 60
+    return (end - min(pt.taken, end)).total_seconds() / 60
 
 
 def own_takes(done: list[tuple[PlayerTurn, datetime]]) -> list[tuple[PlayerTurn, datetime]]:
@@ -478,9 +484,9 @@ def report(seq: list[PlayerTurn], skipped: list[str], turns: bool = False) -> st
         lines.append(f"{'Claude':<14}{'':>50}{take(mean_take_minutes(claude), len(claude)):>20}")
     first, last = seq[0].start, seq[-1].start
     lines.append(
-        f"\nMinutes of workday time ({turn_logger.WORKDAY}). "
-        "Play time: from Start Turn (or Claude taking the seat) to the turn's end; Claude's turns are in its "
-        "own row, not the player's. "
+        f"\nTotals in minutes of workday time ({turn_logger.WORKDAY}). "
+        "Play time: from Start Turn (or Claude taking the seat) to the turn's end, at any hour; Claude's turns "
+        "are in its own row, not the player's. "
         f"{len(done)} player-turns from {first:%a %d %b %H:%M} to {last:%a %d %b %H:%M}; "
         f"{sum(bool(pt.saves) for pt in seq)} have a save of their own, "
         f"{sum(pt.autosave is not None for pt in seq)} an autosave. "

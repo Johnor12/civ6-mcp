@@ -446,6 +446,16 @@ def test_a_turn_taken_before_its_estimated_start_counts_from_the_start(game):
     assert turn_times.take_minutes(ann, bob.start) == turn_times.minutes(ann, bob.start)
 
 
+def test_play_time_counts_outside_the_workday(game):
+    game.row(at(16, 35), 1, "LEADER_A", poll_s=0)  # Ann's turn begins Tuesday afternoon
+    game.taken(at(24 + 8, 32), 1, "LEADER_A")  # she presses Start Turn at 8:32 Wednesday
+    game.row(at(24 + 8, 46), 1, "LEADER_B", poll_s=0)  # and ends it at 8:46, before the workday
+    seq, _ = game.compute()
+    ann, bob = seq
+    assert turn_times.minutes(ann, bob.start) == 25  # the total: 16:35 to 17:00
+    assert turn_times.take_minutes(ann, bob.start) == 14  # play time: 8:32 to 8:46
+
+
 def test_claudes_turns_are_not_the_players_play_time(game):
     _taken_day(game)
     seq, _ = game.compute()
@@ -468,7 +478,7 @@ def test_report_gives_the_play_time(game):
     assert lines == [
         (
             f"*Turn times* in workday hours ({turn_logger.WORKDAY}), slowest first. "
-            "Play time: from pressing Start Turn to the end of the turn."
+            "Play time: from pressing Start Turn to the end of the turn, at any hour."
         ),
         "",
         f"*Yesterday (Tue 27 Oct): 5 turns, 26m 00s average, {turn_times.hms((25 + 14 + 59 / 60 + 7) / 3)} average play time (3 turns)*",

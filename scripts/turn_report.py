@@ -22,7 +22,8 @@ since the log began (again with the turn count, the average turn and each
 player's average and number of turns). Beside each average is the time to
 take the turn, from Start Turn to its end, over the turns that have one
 (the taken log began on 4 Nov 2026), with its own count when that covers
-fewer turns; turns Claude took get a line of their own instead. Under
+fewer turns; turns Claude took get a line of their own instead. Play time
+counts every minute, inside the workday or not. Under
 each heading, the players' play time added up (the previous workday's,
 then all of it since the taken log began). Nothing
 is written anywhere; the turn log is the history. A workday on which the
@@ -162,7 +163,7 @@ def message(seq: list[turn_times.PlayerTurn], today: date | None = None) -> str:
 
     head = f"*Turn times* in workday hours ({WORKDAY}), slowest first."
     if any(pt.taken is not None for pt, _ in done):
-        head += " Play time: from pressing Start Turn to the end of the turn."
+        head += " Play time: from pressing Start Turn to the end of the turn, at any hour."
     lines = [head, "", f"*{label}: {_count(yesterday)}*", *_record(seq, day, len(yesterday)), *_total(yesterday)]
     if yesterday:
         lines += _ranking(turn_times.player_averages(yesterday)) + _claude(yesterday)
