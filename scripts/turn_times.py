@@ -25,17 +25,25 @@ turn began. Each turn's start is placed in the middle of the window those
 facts leave, and players with no evidence of their own are spaced evenly
 between their neighbours, which averages the time over the turns taken.
 
-Beside each turn's total, its play time: from when it was taken
+Beside each turn's workday time, its play time: from when it was taken
 (turn_logger's taken log: the player pressed Start Turn, or Claude took the
 seat as stand-in) to its end. A turn Claude took counts as Claude's, not
 the player's: player_averages leaves it out of the player's play time
-and claude_takes lists it, while its total still counts for the player.
-Turns from before the taken log began have a total only.
+and claude_takes lists it, while its turn time still counts for the player.
+Turns from before the taken log began have a workday time only.
 
-A turn's total is minutes of workday time (turn_logger.WORKDAY, what the
-bot's turn limit counts), so a turn held overnight costs nothing. Play time
-is minutes at any hour: a turn taken at 8:30 and finished at 8:45 has 15
-minutes of play time though its total has none. scripts/turn_report.py
+A turn's workday time (minutes) is minutes of workday time
+(turn_logger.WORKDAY, what the bot's turn limit counts), so a turn held
+overnight costs nothing. Play time is minutes at any hour: a turn taken at
+8:30 and finished at 8:45 has 15 minutes of play time though it has no
+workday time. Its turn time (overall_minutes) joins the two, wait and
+play: the workday time plus the play time outside the workday, so a turn
+waited on until 17:00 and then played until 17:30 has the half hour after
+17:00 too. The averages, medians, longest, slowest and fastest turns go by
+turn time. A turn with no workday time at all, begun and finished outside
+it, still counts as a turn, but the averages, medians and the fastest turn
+leave it out (workday_turns): a turn played overnight says nothing about
+how long a player takes. scripts/turn_report.py
 posts player_averages() in the game channel every workday morning, and
 scripts/turn_announcer.py lists the turns finished since its last post when
 it pings the next player. Standard library only; turn_logger and civ_mcp
@@ -129,15 +137,21 @@ class PlayerTurn:
 
 @dataclass(frozen=True)
 class PlayerAverage:
-    """One player's finished turns: totals in minutes of workday time, play time in minutes at any hour."""
+    """One player's finished turns: turn times (overall_minutes) and play times, in minutes.
+
+    The mean and median turn time leave out the turns with no workday time
+    (off_hours); they are None when every turn is one. The longest covers
+    every turn.
+    """
 
     player: str
     leader: str
     seat: int  # 1-based
     turns: int
     guessed: int  # turns with no row or save of their own
-    mean_minutes: float
-    median_minutes: float
+    off_hours: int  # turns begun and finished outside the workday
+    mean_minutes: float | None
+    median_minutes: float | None
     max_minutes: float
     taken: int = 0  # turns the player took themselves with a play time
     take_mean_minutes: float | None = None  # their average play time; None without one
@@ -376,13 +390,55 @@ def ended_after(seq: list[PlayerTurn], when: datetime) -> list[tuple[PlayerTurn,
 
 
 def minutes(pt: PlayerTurn, end: datetime) -> float:
-    """A finished turn's minutes of workday time."""
+    """A finished turn's minutes of workday time (what the bot's turn limit counts)."""
     return turn_logger.workday_seconds(pt.start, end) / 60
 
 
-def mean_minutes(done: list[tuple[PlayerTurn, datetime]]) -> float:
-    """The average turn among `done` (see finished, ended_on), in minutes of workday time."""
-    return statistics.mean(minutes(pt, end) for pt, end in done)
+def overall_minutes(pt: PlayerTurn, end: datetime) -> float:
+    """A finished turn's turn time: its workday time (minutes) and its play time joined, each minute once.
+
+    The workday time leaves out play outside the workday, the play time
+    (take_minutes) the wait before Start Turn; this keeps both. A turn
+    begun at 16:00 and played from 17:00 to 17:30 has 1h 30m; one begun at
+    16:30, taken at 8:30 the next morning and finished at 9:15 has 1h 15m
+    (16:30 to 17:00, then 8:30 to 9:15). Without a play time, the workday time.
+    """
+    total = turn_logger.workday_seconds(pt.start, end)
+    if pt.taken is None:
+        return total / 60
+    taken = min(max(pt.taken, pt.start), end)
+    off_hours_play = (end - taken).total_seconds() - turn_logger.workday_seconds(taken, end)
+    return (total + off_hours_play) / 60
+
+
+def workday_turns(done: list[tuple[PlayerTurn, datetime]]) -> list[tuple[PlayerTurn, datetime]]:
+    """The turns among `done` with some workday time: all but those begun and finished outside the workday.
+
+    The average and median turn time and the fastest turn go by these: a
+    turn played overnight says nothing about how long a player takes.
+    """
+    return [(pt, end) for pt, end in done if minutes(pt, end) > 0]
+
+
+def timed_turns(done: list[tuple[PlayerTurn, datetime]]) -> list[tuple[PlayerTurn, datetime, float]]:
+    """Every turn among `done` with its end and its turn time (overall_minutes), in the order of `done`.
+
+    max() over all of `done` gives the slowest turn, min() over its
+    workday_turns the fastest; ties go to the first turn that reached them.
+    """
+    return [(pt, end, overall_minutes(pt, end)) for pt, end in done]
+
+
+def mean_minutes(done: list[tuple[PlayerTurn, datetime]]) -> float | None:
+    """The average turn time among `done` (see finished, ended_on), over its workday_turns; None for none."""
+    mins = [m for _, _, m in timed_turns(workday_turns(done))]
+    return statistics.mean(mins) if mins else None
+
+
+def median_minutes(done: list[tuple[PlayerTurn, datetime]]) -> float | None:
+    """The median turn time among `done`, over its workday_turns; None for none."""
+    mins = [m for _, _, m in timed_turns(workday_turns(done))]
+    return statistics.median(mins) if mins else None
 
 
 def take_minutes(pt: PlayerTurn, end: datetime) -> float | None:
@@ -430,15 +486,16 @@ def total_take_minutes(done: list[tuple[PlayerTurn, datetime]]) -> float | None:
 def player_averages(done: list[tuple[PlayerTurn, datetime]]) -> list[PlayerAverage]:
     """One entry per player with a turn among `done` (see finished, ended_on), slowest on average first.
 
-    Totals cover every turn; the play time only the turns the player
-    took themselves (own_takes): Claude's are in claude_takes.
+    The turn count and longest turn cover every turn, the mean and median
+    only the workday_turns: players without one come last, by seat. The
+    play time covers only the turns the player took themselves
+    (own_takes): Claude's are in claude_takes.
     """
     by_player: dict[str, list[tuple[PlayerTurn, datetime]]] = {}
     for pt, end in done:
         by_player.setdefault(pt.player, []).append((pt, end))
     out = []
     for player, turns in by_player.items():
-        mins = [minutes(pt, end) for pt, end in turns]
         first = turns[0][0]
         own = own_takes(turns)
         out.append(PlayerAverage(
@@ -447,13 +504,14 @@ def player_averages(done: list[tuple[PlayerTurn, datetime]]) -> list[PlayerAvera
             seat=first.seat + 1,
             turns=len(turns),
             guessed=sum(pt.basis == "interpolated" for pt, _ in turns),
-            mean_minutes=statistics.mean(mins),
-            median_minutes=statistics.median(mins),
-            max_minutes=max(mins),
+            off_hours=len(turns) - len(workday_turns(turns)),
+            mean_minutes=mean_minutes(turns),
+            median_minutes=median_minutes(turns),
+            max_minutes=max(m for _, _, m in timed_turns(turns)),
             taken=len(own),
             take_mean_minutes=mean_take_minutes(own),
         ))
-    out.sort(key=lambda a: (-a.mean_minutes, a.seat))
+    out.sort(key=lambda a: (a.mean_minutes is None, -(a.mean_minutes or 0.0), a.seat))
     return out
 
 
@@ -478,7 +536,7 @@ def report(seq: list[PlayerTurn], skipped: list[str], turns: bool = False) -> st
             )
             lines.append(
                 f"T{pt.turn:<3}{pt.player:<14}{pt.start:%a %d %H:%M:%S} -> {end:%a %H:%M:%S}  "
-                f"{hms(minutes(pt, end)):>11}  {pt.basis:<13}{taken}"
+                f"{hms(overall_minutes(pt, end)):>11}  {pt.basis:<13}workday time: {hms(minutes(pt, end))}; {taken}"
                 f"window {pt.earliest:%H:%M:%S}-{pt.latest:%H:%M:%S}  "
                 + "; ".join(
                     [f"log {t:%H:%M:%S}" for t in sorted(pt.rows)]
@@ -490,27 +548,31 @@ def report(seq: list[PlayerTurn], skipped: list[str], turns: bool = False) -> st
     def take(mean: float | None, n: int) -> str:
         return f"{hms(mean)} ({n})" if mean is not None else "-"
 
+    def avg(mins: float | None) -> str:
+        return hms(mins) if mins is not None else "-"
+
     lines.append(
-        f"{'player':<14}{'turns':>6}{'guessed':>8}{'average':>12}{'median':>12}{'longest':>12}"
+        f"{'player':<14}{'turns':>6}{'guessed':>8}{'off hrs':>8}{'average':>12}{'median':>12}{'longest':>12}"
         f"{'play time (turns)':>20}"
     )
     for a in player_averages(done):
         lines.append(
-            f"{a.player:<14}{a.turns:>6}{a.guessed:>8}{hms(a.mean_minutes):>12}{hms(a.median_minutes):>12}"
-            f"{hms(a.max_minutes):>12}{take(a.take_mean_minutes, a.taken):>20}"
+            f"{a.player:<14}{a.turns:>6}{a.guessed:>8}{a.off_hours:>8}{avg(a.mean_minutes):>12}"
+            f"{avg(a.median_minutes):>12}{hms(a.max_minutes):>12}{take(a.take_mean_minutes, a.taken):>20}"
         )
-    median = statistics.median(minutes(pt, end) for pt, end in done)
     own = own_takes(done)
     lines.append(
-        f"{'ALL':<14}{len(done):>6}{'':>8}{hms(mean_minutes(done)):>12}{hms(median):>12}{'':>12}"
-        f"{take(mean_take_minutes(own), len(own)):>20}"
+        f"{'ALL':<14}{len(done):>6}{'':>8}{len(done) - len(workday_turns(done)):>8}{avg(mean_minutes(done)):>12}"
+        f"{avg(median_minutes(done)):>12}{'':>12}{take(mean_take_minutes(own), len(own)):>20}"
     )
     claude = claude_takes(done)
     if claude:
-        lines.append(f"{'Claude':<14}{'':>50}{take(mean_take_minutes(claude), len(claude)):>20}")
+        lines.append(f"{'Claude':<14}{'':>58}{take(mean_take_minutes(claude), len(claude)):>20}")
     first, last = seq[0].start, seq[-1].start
     lines.append(
-        f"\nTotals in minutes of workday time ({turn_logger.WORKDAY}). "
+        f"\nTurn time: workday time ({turn_logger.WORKDAY}) from the turn's start to its end, plus play time "
+        "outside it. The average and median leave out the turns with no workday time (off hrs: begun and "
+        "finished outside it). "
         "Play time: from Start Turn (or Claude taking the seat) to the turn's end, at any hour; Claude's turns "
         "are in its own row, not the player's. "
         f"{len(done)} player-turns from {first:%a %d %b %H:%M} to {last:%a %d %b %H:%M}; "

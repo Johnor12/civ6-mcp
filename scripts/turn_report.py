@@ -19,14 +19,19 @@ finished overnight or over the weekend is the previous workday's. The post
 has two sections, the previous workday and every turn since the log began,
 and each opens with its figures, one to a line: the turns (the previous
 workday's against the record for most turns on one workday), the average
-turn time (minutes of workday time, turn_logger.WORKDAY, what the bot's
-turn limit counts), the average and total play time, and the longest and
-shortest play time with whose turn it was (in the second section, the
-records, with the workday they count towards). Play time runs from Start
-Turn to the turn's end at any hour, over the turns that have one (the
-taken log began on 4 Nov 2026), and leaves out the turns Claude took.
-Two rankings follow, slowest first: each player's
-average turn time with their number of turns, then each player's average
+turn time, the slowest and fastest turn, the average and total play time,
+and the longest and shortest play time, each extreme with whose turn it
+was (in the second section, the records, with the workday they count
+towards). Turn time is wait plus play (turn_times.overall_minutes): the
+minutes of workday time (turn_logger.WORKDAY, what the bot's turn limit
+counts) from the turn's start to its end, plus its play time outside the
+workday. A turn with no workday time, begun and finished outside it,
+counts as a turn but not in the average turn time or as the fastest.
+Play time runs from Start Turn to the turn's end at any hour, over the
+turns that have one (the taken log began on 4 Nov 2026), and leaves out
+the turns Claude took. Two rankings follow, slowest first: each player's
+average turn time with their number of turns (and the players whose
+turns all had no workday time), then each player's average
 play time, with its own count when it covers fewer of their turns, and a
 line for the turns Claude took. Nothing is written anywhere; the turn log
 is the history. A workday on which the process is not up at POST_AT gets
@@ -68,26 +73,50 @@ def _turns(n: int) -> str:
     return f"{n} turn" + ("s" if n != 1 else "")
 
 
+def _extreme(
+    label: str, timed: list[tuple[turn_times.PlayerTurn, datetime, float]], pick, dated: bool
+) -> str:
+    """'20m 00s longest play time (Mike, turn 21)': the turn among `timed` that `pick` (max or min) finds.
+
+    `dated` adds the workday it counts towards ('(Mike, turn 21, Wed 04 Nov)').
+    """
+    pt, end, mins = pick(timed, key=lambda t: t[2])
+    when = f", {turn_times.workday_of(end):%a %d %b}" if dated else ""
+    return f"{turn_times.hms(mins)} {label} ({pt.player}, turn {pt.turn}{when})"
+
+
 def _figures(
     done: list[tuple[turn_times.PlayerTurn, datetime]], record: str = "", dated: bool = False
 ) -> list[str]:
-    """A section's figures, one to a line: its turns (with `record` after), average turn time, then play time:
-    average, total, longest and shortest.
+    """A section's figures, one to a line: its turns (with `record` after), turn time: average, slowest and
+    fastest, then play time: average, total, longest and shortest.
 
     '3 turns (record: 5, Tue 27 Oct)', '23m 20s average turn time',
+    '1h 10m 00s slowest turn (Hunter, turn 19)', '4m 30s fastest turn (Randy, turn 20)',
     '12m 05s average play time', '24m 10s total play time',
     '20m 00s longest play time (Mike, turn 21)',
     '0m 17s shortest play time (Cameron, turn 20)'. `dated` adds the workday
-    each of the last two counts towards ('(Mike, turn 21, Wed 04 Nov)'),
-    for a section that spans several. The play time leaves out the turns
-    Claude took (own_takes); its lines are missing while no other turn has
-    one, the longest and shortest while only one does, and only the turns
-    show when there are none.
+    each extreme counts towards ('(Mike, turn 21, Wed 04 Nov)'), for a
+    section that spans several. Turn time is wait plus play
+    (turn_times.overall_minutes); the average and the fastest leave out the
+    turns with no workday time (turn_times.workday_turns), and each of them
+    is missing while it has no turn to go by, the slowest and fastest while
+    they have only one. The play time leaves out the turns Claude took
+    (own_takes); its lines are missing while no other turn has one, the
+    longest and shortest while only one does.
     """
     lines = [_turns(len(done)) + record]
     if not done:
         return lines
-    lines.append(f"{turn_times.hms(turn_times.mean_minutes(done))} average turn time")
+    mean = turn_times.mean_minutes(done)
+    if mean is not None:
+        lines.append(f"{turn_times.hms(mean)} average turn time")
+    every = turn_times.timed_turns(done)
+    if len(every) > 1:
+        lines.append(_extreme("slowest turn", every, max, dated))
+    workday = turn_times.timed_turns(turn_times.workday_turns(done))
+    if len(workday) > 1:
+        lines.append(_extreme("fastest turn", workday, min, dated))
     own = turn_times.own_takes(done)
     mean = turn_times.mean_take_minutes(own)
     if mean is not None:
@@ -95,19 +124,26 @@ def _figures(
         lines.append(f"{turn_times.hms(turn_times.total_take_minutes(own))} total play time")
     timed = turn_times.timed_takes(own)
     if len(timed) > 1:
-        for label, pick in (("longest", max), ("shortest", min)):
-            pt, end, mins = pick(timed, key=lambda t: t[2])
-            when = f", {turn_times.workday_of(end):%a %d %b}" if dated else ""
-            lines.append(f"{turn_times.hms(mins)} {label} play time ({pt.player}, turn {pt.turn}{when})")
+        lines.append(_extreme("longest play time", timed, max, dated))
+        lines.append(_extreme("shortest play time", timed, min, dated))
     return lines
 
 
 def _turn_ranking(averages: list[turn_times.PlayerAverage]) -> list[str]:
-    """'1. Cy: 30m 00s (3 turns)': each player's average turn time and number of turns, slowest first."""
-    return ["_Average turn time, slowest first:_"] + [
+    """'1. Cy: 30m 00s (3 turns)': each player's average turn time and number of turns, slowest first.
+
+    Then 'No workday time: Di' for the players whose turns all began and
+    ended outside the workday, who have no average.
+    """
+    ranked = [a for a in averages if a.mean_minutes is not None]
+    lines = ["_Average turn time, slowest first:_"] if ranked else []
+    lines += [
         f"{rank}. {a.player}: {turn_times.hms(a.mean_minutes)} ({_turns(a.turns)})"
-        for rank, a in enumerate(averages, 1)
+        for rank, a in enumerate(ranked, 1)
     ]
+    if off := [a.player for a in averages if a.mean_minutes is None]:
+        lines.append("No workday time: " + ", ".join(off))
+    return lines
 
 
 def _play_ranking(averages: list[turn_times.PlayerAverage]) -> list[str]:
