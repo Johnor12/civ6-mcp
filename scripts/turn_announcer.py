@@ -29,12 +29,14 @@ the one before: a turn finished overnight adds to its count.
 - When the turn begins: "it's your turn", unless someone has @'d the player
   in the channel since. Players ping the next one by hand when they finish,
   so a mention by anyone counts. The message ends with every turn finished
-  since the bot last posted in the channel and how long each took, in
-  workday time, from scripts/turn_times.py (the daily report's figures), so
-  the turns that got a hand ping are accounted for too. A turn with a play
-  time (from Start Turn to its end, at any hour) has it in brackets, marked when
-  Claude took the turn. Without a post of
-  its own in the last LOOKBACK_S, the turns of that stretch are listed.
+  since the bot last posted in the channel and its turn time, wait plus
+  play (turn_times.overall_minutes: the workday time from the turn's start
+  to its end, plus its play time outside the workday), from
+  scripts/turn_times.py (the daily report's figures), so the turns that got
+  a hand ping are accounted for too. A turn with a play time (from Start
+  Turn to its end, at any hour) has it in brackets, marked when Claude took
+  the turn. Without a post of its own in the last LOOKBACK_S, the turns of
+  that stretch are listed.
 - After REMINDER_S of workday time: a reminder from the bot.
 - After turn_logger.TURN_LIMIT_S: a last message from the bot, saying any
   other player can now have the turn played through the Slack bot.
@@ -188,8 +190,11 @@ def mentioned(client, slack_id: str, since: datetime, from_bot: bool) -> bool:
 
 
 def _recent(pt: turn_times.PlayerTurn, end: datetime) -> str:
-    """'Heldi 30m 00s (play time: 10m 00s)', 'Randy 1h 05m 00s (Claude, play time: 4m 10s)' or just 'Cy 5m 00s'."""
-    text = f"{pt.player} {turn_times.hms(turn_times.minutes(pt, end))}"
+    """'Heldi 30m 00s (play time: 10m 00s)', 'Randy 1h 05m 00s (Claude, play time: 4m 10s)' or just 'Cy 5m 00s'.
+
+    The first figure is the turn time, wait plus play (turn_times.overall_minutes).
+    """
+    text = f"{pt.player} {turn_times.hms(turn_times.overall_minutes(pt, end))}"
     take = turn_times.take_minutes(pt, end)
     if take is not None:
         text += f" ({'Claude, ' if pt.claude else ''}play time: {turn_times.hms(take)})"
@@ -220,8 +225,8 @@ def todays_turns(seq: list[turn_times.PlayerTurn] | None, now: datetime) -> str:
 def recent_turns(client, seq: list[turn_times.PlayerTurn] | None, now: datetime) -> str:
     """' Since my last post: Heldi 30m 00s (play time: 10m 00s), Randy 10m 12s.' for the turns finished since; '' for none.
 
-    The turns and their minutes of workday time (each listed as _recent
-    gives it) come from `seq` (see player_turns); '' without it. The bot's
+    The turns and their turn times, wait plus play (each listed as _recent
+    gives it), come from `seq` (see player_turns); '' without it. The bot's
     last post is looked for LOOKBACK_S back; without one, the turns of that
     stretch are listed. Never raises: a failure is logged and the message
     goes out without the list.

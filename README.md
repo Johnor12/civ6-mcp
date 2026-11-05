@@ -179,9 +179,11 @@ and what the viewer can do about it), and an invite to
   check every minute and @'s the player whose turn it is in
   #proj-diplomatic-relations: "it's your turn" when the turn begins (unless
   someone already @'d them there since), with every turn finished since
-  the bot's last post in the channel and how long each took in workday
-  time, plus its play time (Start Turn to the end of the turn, marked
-  when Claude took it) where the taken log has one; a reminder after 30 minutes of workday time; and after 1 hour a last
+  the bot's last post in the channel and its turn time, wait plus play
+  (workday time from the turn's start to its end, plus play time outside
+  the workday, as the daily report counts it), plus its play time (Start
+  Turn to the end of the turn, marked when Claude took it) where the taken
+  log has one; a reminder after 30 minutes of workday time; and after 1 hour a last
   one saying any other player can now have the turn played through the
   bot. Each message gives today's turns (how many player-turns have ended
   today, as the daily report counts them against the record) so the

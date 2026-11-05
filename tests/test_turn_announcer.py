@@ -176,6 +176,18 @@ class TestRecentTurns:
             "Heldi 30m 00s (play time: 10m 00s), Randy 1h 04m 00s (Claude, play time: 4m 00s)."
         )
 
+    def test_the_list_counts_play_after_the_workday(self, slack):
+        # Heldi's turn waited from 16:30, and she played it from 16:50 to 17:20:
+        # 30m of workday time plus the 20m played after 17:00.
+        _turn(_at(0, 16, 30), player="Heldi", leader="LEADER_GITARJA")
+        assert _check(slack, _at(0, 16, 31))
+        _taken(_at(0, 16, 50), player="Heldi", leader="LEADER_GITARJA")
+        _turn(_at(0, 17, 20))  # Randy
+        assert _check(slack, _at(0, 17, 21))
+        assert slack.posts[-1] == (
+            f"<@{RANDY}> it's your turn (today's turns: 1). Since my last post: Heldi 50m 00s (play time: 30m 00s)."
+        )
+
     def test_without_a_post_of_its_own_the_bot_lists_the_last_day(self, slack):
         _turn(_at(0, 9), player="Cameron", leader="LEADER_JULIUS_CAESAR")
         _turn(_at(0, 10), player="Heldi", leader="LEADER_GITARJA")  # Cameron's turn ended on Monday
