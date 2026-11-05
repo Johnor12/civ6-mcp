@@ -20,10 +20,12 @@ has two sections, the previous workday and every turn since the log began,
 and each opens with its figures, one to a line: the turns (the previous
 workday's against the record for most turns on one workday), the average
 turn time (minutes of workday time, turn_logger.WORKDAY, what the bot's
-turn limit counts), the average play time and the total play time. Play
-time runs from Start Turn to the turn's end at any hour, over the turns
-that have one (the taken log began on 4 Nov 2026), and leaves out the
-turns Claude took. Two rankings follow, slowest first: each player's
+turn limit counts), the average and total play time, and the longest and
+shortest play time with whose turn it was (in the second section, the
+records, with the workday they count towards). Play time runs from Start
+Turn to the turn's end at any hour, over the turns that have one (the
+taken log began on 4 Nov 2026), and leaves out the turns Claude took.
+Two rankings follow, slowest first: each player's
 average turn time with their number of turns, then each player's average
 play time, with its own count when it covers fewer of their turns, and a
 line for the turns Claude took. Nothing is written anywhere; the turn log
@@ -66,13 +68,21 @@ def _turns(n: int) -> str:
     return f"{n} turn" + ("s" if n != 1 else "")
 
 
-def _figures(done: list[tuple[turn_times.PlayerTurn, datetime]], record: str = "") -> list[str]:
-    """A section's figures, one to a line: its turns (with `record` after), average turn time, average and total play time.
+def _figures(
+    done: list[tuple[turn_times.PlayerTurn, datetime]], record: str = "", dated: bool = False
+) -> list[str]:
+    """A section's figures, one to a line: its turns (with `record` after), average turn time, then play time:
+    average, total, longest and shortest.
 
     '3 turns (record: 5, Tue 27 Oct)', '23m 20s average turn time',
-    '12m 05s average play time', '24m 10s total play time'. The play time
-    leaves out the turns Claude took (own_takes); its lines are missing
-    while no other turn has one, and only the turns show when there are none.
+    '12m 05s average play time', '24m 10s total play time',
+    '20m 00s longest play time (Mike, turn 21)',
+    '0m 17s shortest play time (Cameron, turn 20)'. `dated` adds the workday
+    each of the last two counts towards ('(Mike, turn 21, Wed 04 Nov)'),
+    for a section that spans several. The play time leaves out the turns
+    Claude took (own_takes); its lines are missing while no other turn has
+    one, the longest and shortest while only one does, and only the turns
+    show when there are none.
     """
     lines = [_turns(len(done)) + record]
     if not done:
@@ -83,6 +93,12 @@ def _figures(done: list[tuple[turn_times.PlayerTurn, datetime]], record: str = "
     if mean is not None:
         lines.append(f"{turn_times.hms(mean)} average play time")
         lines.append(f"{turn_times.hms(turn_times.total_take_minutes(own))} total play time")
+    timed = turn_times.timed_takes(own)
+    if len(timed) > 1:
+        for label, pick in (("longest", max), ("shortest", min)):
+            pt, end, mins = pick(timed, key=lambda t: t[2])
+            when = f", {turn_times.workday_of(end):%a %d %b}" if dated else ""
+            lines.append(f"{turn_times.hms(mins)} {label} play time ({pt.player}, turn {pt.turn}{when})")
     return lines
 
 
@@ -112,11 +128,15 @@ def _play_ranking(averages: list[turn_times.PlayerAverage]) -> list[str]:
 
 
 def _section(
-    heading: str, done: list[tuple[turn_times.PlayerTurn, datetime]], record: str = "", idle: list[str] | None = None
+    heading: str,
+    done: list[tuple[turn_times.PlayerTurn, datetime]],
+    record: str = "",
+    idle: list[str] | None = None,
+    dated: bool = False,
 ) -> list[str]:
-    """'*heading:*', the figures (_figures), then the turn time ranking, with the `idle` players
-    after it, and the play time ranking, with the turns Claude took after it."""
-    lines = [f"*{heading}:*", *_figures(done, record)]
+    """'*heading:*', the figures (_figures, `record` and `dated` go to it), then the turn time ranking,
+    with the `idle` players after it, and the play time ranking, with the turns Claude took after it."""
+    lines = [f"*{heading}:*", *_figures(done, record, dated)]
     if not done:
         return lines
     averages = turn_times.player_averages(done)
@@ -178,7 +198,7 @@ def message(seq: list[turn_times.PlayerTurn], today: date | None = None) -> str:
     idle = sorted((p for p in seats if p not in played), key=seats.get)
 
     lines = _section(label, yesterday, _record(seq, day, len(yesterday)), idle)
-    lines += ["", *_section(f"All turns since {seq[0].start:%a %d %b}", done)]
+    lines += ["", *_section(f"All turns since {seq[0].start:%a %d %b}", done, dated=True)]
     return "\n".join(lines)
 
 

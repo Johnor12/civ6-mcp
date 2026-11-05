@@ -515,24 +515,53 @@ def test_report_gives_the_play_time(game):
     seq, _ = game.compute()
     lines = turn_report.message(seq, today=date(2026, 10, 28)).splitlines()
     di_take = turn_times.hms(14 + 59 / 60)  # from 11:45:01 to 12:00
-    section = [
-        "5 turns",
-        "26m 00s average turn time",
-        f"{turn_times.hms((25 + 14 + 59 / 60 + 7) / 3)} average play time",  # Ann 25 + 7, Di 14:59; not Claude's 5
-        "46m 59s total play time",
-        "",
-        "_Average turn time, slowest first:_",
-        "1. Bob: 1h 05m 00s (1 turn)",
-        "2. Ann: 20m 00s (2 turns)",
-        "3. Di: 15m 00s (1 turn)",
-        "4. Cy: 10m 00s (1 turn)",
-        "",
-        "_Average play time, slowest first:_",
-        "1. Ann: 16m 00s",
-        f"2. Di: {di_take}",
-        "Claude took 1 turn (Bob), play time: 5m 00s",
+
+    def section(when: str) -> list[str]:
+        return [
+            "5 turns",
+            "26m 00s average turn time",
+            f"{turn_times.hms((25 + 14 + 59 / 60 + 7) / 3)} average play time",  # Ann 25 + 7, Di 14:59; not Claude's 5
+            "46m 59s total play time",
+            f"25m 00s longest play time (Ann, turn 1{when})",
+            f"7m 00s shortest play time (Ann, turn 2{when})",  # not Claude's 5
+            "",
+            "_Average turn time, slowest first:_",
+            "1. Bob: 1h 05m 00s (1 turn)",
+            "2. Ann: 20m 00s (2 turns)",
+            "3. Di: 15m 00s (1 turn)",
+            "4. Cy: 10m 00s (1 turn)",
+            "",
+            "_Average play time, slowest first:_",
+            "1. Ann: 16m 00s",
+            f"2. Di: {di_take}",
+            "Claude took 1 turn (Bob), play time: 5m 00s",
+        ]
+
+    assert lines == [
+        "*Yesterday (Tue 27 Oct):*", *section(""), "", "*All turns since Tue 27 Oct:*", *section(", Tue 27 Oct"),
     ]
-    assert lines == ["*Yesterday (Tue 27 Oct):*", *section, "", "*All turns since Tue 27 Oct:*", *section]
+
+
+def test_longest_and_shortest_play_time_go_to_the_first_turn_that_reached_them(game):
+    game.row(at(10), 1, "LEADER_A", poll_s=0)
+    game.taken(at(10, 2), 1, "LEADER_A")  # Ann: 8 min of play time
+    game.row(at(10, 10), 1, "LEADER_B", poll_s=0)
+    game.taken(at(10, 15), 1, "LEADER_B")  # Bob: 5 min
+    game.row(at(10, 20), 1, "LEADER_C", poll_s=0)
+    game.taken(at(10, 22), 1, "LEADER_C")  # Cy: 8 min, ties Ann
+    game.row(at(10, 30), 1, "LEADER_D", poll_s=0)
+    game.taken(at(10, 30), 1, "LEADER_D", by="claude")  # Di: Claude took it, 1 min
+    game.row(at(10, 31), 2, "LEADER_A", poll_s=0)
+    game.taken(at(10, 36), 2, "LEADER_A")  # Ann's turn 2: 5 min, ties Bob
+    game.row(at(10, 41), 2, "LEADER_B", poll_s=0)  # in progress
+    seq, _ = game.compute()
+    lines = turn_report.message(seq, today=date(2026, 10, 28)).splitlines()
+    assert lines[5:7] == ["8m 00s longest play time (Ann, turn 1)", "5m 00s shortest play time (Bob, turn 1)"]
+    since = lines.index("*All turns since Tue 27 Oct:*")
+    assert lines[since + 5:since + 7] == [
+        "8m 00s longest play time (Ann, turn 1, Tue 27 Oct)",
+        "5m 00s shortest play time (Bob, turn 1, Tue 27 Oct)",
+    ]
 
 
 def test_a_player_with_some_turns_untimed_gets_the_count(game):
@@ -559,16 +588,20 @@ def test_each_section_opens_with_its_figures(game):
     game.row(at(24 + 9, 20), 1, "LEADER_D", poll_s=0)  # Di's turn in progress
     seq, _ = game.compute()
     lines = turn_report.message(seq, today=date(2026, 10, 29)).splitlines()
-    assert lines[:5] == [
+    assert lines[:6] == [
         "*Yesterday (Wed 28 Oct):*",
         "2 turns (new record! Previous: 1, Tue 27 Oct)",
         "25m 00s average turn time",
         "8m 00s average play time",
         "8m 00s total play time",
+        "",  # one timed turn: no longest or shortest
     ]
     since = lines.index("*All turns since Tue 27 Oct:*")
-    assert lines[since + 1:since + 5] == [
+    assert lines[since + 1:since + 8] == [
         "3 turns", "26m 40s average turn time", "14m 00s average play time", "28m 00s total play time",
+        "20m 00s longest play time (Ann, turn 1, Tue 27 Oct)",
+        "8m 00s shortest play time (Bob, turn 1, Wed 28 Oct)",
+        "",
     ]
 
 

@@ -406,15 +406,24 @@ def claude_takes(done: list[tuple[PlayerTurn, datetime]]) -> list[tuple[PlayerTu
     return [(pt, end) for pt, end in done if pt.claude]
 
 
+def timed_takes(done: list[tuple[PlayerTurn, datetime]]) -> list[tuple[PlayerTurn, datetime, float]]:
+    """The turns among `done` with a known play time, each with its end and that play time, in the order of `done`.
+
+    Pass own_takes or claude_takes. max() and min() over the play time
+    give the first turn that reached a tie, as `done` is in turn order.
+    """
+    return [(pt, end, m) for pt, end in done if (m := take_minutes(pt, end)) is not None]
+
+
 def mean_take_minutes(done: list[tuple[PlayerTurn, datetime]]) -> float | None:
     """The average play time among `done` (pass own_takes or claude_takes); None for none."""
-    mins = [m for pt, end in done if (m := take_minutes(pt, end)) is not None]
+    mins = [m for _, _, m in timed_takes(done)]
     return statistics.mean(mins) if mins else None
 
 
 def total_take_minutes(done: list[tuple[PlayerTurn, datetime]]) -> float | None:
     """The play time summed over `done` (pass own_takes or claude_takes); None for none."""
-    mins = [m for pt, end in done if (m := take_minutes(pt, end)) is not None]
+    mins = [m for _, _, m in timed_takes(done)]
     return sum(mins) if mins else None
 
 
