@@ -41,6 +41,12 @@ the one before: a turn finished overnight adds to its count.
 - After turn_logger.TURN_LIMIT_S: a last message from the bot, saying any
   other player can now have the turn played through the Slack bot.
 
+Neither reminder goes out once the turn has been taken: the taken log
+(scripts/data/taken_log.jsonl, beside the turn log, also kept by the turn
+logger) has a row for it when the player has pressed Start Turn or Claude
+has taken the seat, and a player already playing has no use for a nudge.
+The start-of-turn message still goes out, for the list it carries.
+
 Only the latest message due is sent, so a turn found an hour in gets the
 one-hour message alone. A reminder counts as sent when the bot has @'d the
 player in the channel after it fell due, so a restart sends nothing twice.
@@ -139,6 +145,18 @@ def _announce(client, now: datetime) -> bool:
     rec, worked = current
     stage = max(i for i, (after, _) in enumerate(STAGES) if worked >= after)
     if (rec.key, stage) in _sent:
+        return False
+    if stage > 0 and (took := turn_logger.turn_taken(rec.key)) is not None:
+        # Being played: a reminder would only interrupt.
+        log.info(
+            "turn %d: no %s message for %s, %s at %s",
+            rec.turn,
+            duration(STAGES[stage][0]),
+            rec.player,
+            "who pressed Start Turn" if took.by == turn_logger.turn_watch.PLAYER else "Claude took the seat",
+            f"{took.at:%H:%M:%S}",
+        )
+        _sent.add((rec.key, stage))
         return False
     player = player_named(rec.player)
     if player is None:

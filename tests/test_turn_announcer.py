@@ -246,9 +246,57 @@ class TestReminders:
         assert _check(slack, _at(0, 12, 30))
         assert len(slack.posts) == 1 and "through this app" in slack.posts[0]
 
+    def test_no_reminder_once_start_turn_is_pressed(self, slack, caplog):
+        caplog.set_level("INFO", logger="turn_announcer")
+        # Aaron's turn 33: Start Turn pressed just before the hour was up.
+        _turn(_at(0, 10))
+        assert _check(slack, _at(0, 10, 1))
+        _taken(_at(0, 10, 58))
+        calls = slack.history_calls
+        assert not _check(slack, _at(0, 11))
+        assert not _check(slack, _at(0, 13))
+        assert len(slack.posts) == 1
+        assert slack.history_calls == calls  # Slack is not even asked
+        assert "no 1h message for Randy, who pressed Start Turn at 10:58:00" in caplog.text
+
+    def test_a_turn_taken_after_the_first_reminder_gets_no_second(self, slack):
+        _turn(_at(0, 10))
+        assert _check(slack, _at(0, 10, 1))
+        assert _check(slack, _at(0, 10, 30))
+        _taken(_at(0, 10, 40))
+        assert not _check(slack, _at(0, 11))
+        assert len(slack.posts) == 2 and "reminder" in slack.posts[-1]
+
+    def test_no_reminder_while_claude_plays_the_turn(self, slack, caplog):
+        caplog.set_level("INFO", logger="turn_announcer")
+        _turn(_at(0, 10))
+        assert _check(slack, _at(0, 10, 1))
+        _taken(_at(0, 10, 20), by="claude")
+        assert not _check(slack, _at(0, 10, 30))
+        assert not _check(slack, _at(0, 11))
+        assert len(slack.posts) == 1
+        assert "Claude took the seat at 10:20:00" in caplog.text
+
+    def test_another_turn_taken_does_not_count(self, slack):
+        _turn(_at(0, 9), turn=2)
+        _taken(_at(0, 9, 5), turn=2)  # Randy's previous turn
+        _turn(_at(0, 9, 30), player="Heldi", turn=2, leader="LEADER_GITARJA")
+        _taken(_at(0, 9, 35), player="Heldi", turn=2, leader="LEADER_GITARJA")
+        _turn(_at(0, 10))
+        assert _check(slack, _at(0, 10, 1))
+        assert _check(slack, _at(0, 10, 30))
+        assert "reminder" in slack.posts[-1]
+
+    def test_the_turn_message_still_goes_out_when_already_taken(self, slack):
+        # It carries the list of finished turns; only reminders are dropped.
+        _turn(_at(0, 10))
+        _taken(_at(0, 10))
+        assert _check(slack, _at(0, 10, 1))
+        assert slack.posts[-1].startswith(f"<@{RANDY}> it's your turn")
+
     def test_the_clock_runs_in_workday_hours_only(self, slack):
-        _turn(_at(4, 16, 45))  # Friday afternoon
-        assert _check(slack, _at(4, 16, 46))
+        _turn(_at(4, 15, 45))  # Friday afternoon; Friday ends at 16:00
+        assert _check(slack, _at(4, 15, 46))
         assert not _check(slack, _at(7, 9, 10))  # Monday: 25 min so far
         assert _check(slack, _at(7, 9, 15))
         assert "reminder" in slack.posts[-1]

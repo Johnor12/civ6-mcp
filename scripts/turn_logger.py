@@ -106,14 +106,20 @@ SCREEN_POLL_S = 2  # how late a row is when a turn-change screen line set off it
 SAVE_LOOKBACK_S = 60  # how late a row from before poll_s can be, for the saves that count as its turn's
 MIDTURN_SAVE_TAG = f"{hotseat.SAVE_TAG} MIDTURN"  # a save taken after the player pressed Start Turn
 
-# Workday hours, local time, Monday to Friday. The grace period (lunch) inside
-# them counts as outside work hours: turn clocks, deadlines and totals skip it.
+# Workday hours, local time, Monday to Friday; Friday ends an hour early. The
+# grace period (lunch) inside them counts as outside work hours: turn clocks,
+# deadlines and totals skip it.
 WORKDAY_START_HOUR = 9
 WORKDAY_END_HOUR = 17
+FRIDAY_END_HOUR = 16
 GRACE_START = clock(12, 15)
 GRACE_END = clock(12, 45)
 WORKDAY_SPANS = ((clock(WORKDAY_START_HOUR), GRACE_START), (GRACE_END, clock(WORKDAY_END_HOUR)))
-WORKDAY = ", ".join(f"{a.hour}:{a.minute:02d}–{b.hour}:{b.minute:02d}" for a, b in WORKDAY_SPANS) + ", Mon–Fri"
+FRIDAY_SPANS = ((clock(WORKDAY_START_HOUR), GRACE_START), (GRACE_END, clock(FRIDAY_END_HOUR)))
+WORKDAY = (
+    ", ".join(f"{a.hour}:{a.minute:02d}–{b.hour}:{b.minute:02d}" for a, b in WORKDAY_SPANS)
+    + f", Mon–Fri (Fri until {FRIDAY_END_HOUR}:00)"
+)
 TURN_LIMIT_S = 3600  # workday time after which another player may have a turn played
 
 
@@ -240,6 +246,16 @@ def read_taken(path: Path | None = None) -> list[TakenRecord]:
         except (ValueError, KeyError, TypeError):
             log.warning("skipping a bad row in %s: %r", taken_path, line)
     return rows
+
+
+def turn_taken(key: tuple[int, str, str], by: str | None = None, path: Path | None = None) -> TakenRecord | None:
+    """The taken log's row for the turn `key` (by `by` alone when given), or None while nobody has taken it.
+
+    A turn is taken when its player presses Start Turn ("player") or Claude
+    takes the seat as stand-in ("claude"); from then on it is being played.
+    `path` is the turn log; the taken log is beside it.
+    """
+    return next((t for t in read_taken(path) if t.key == key and (by is None or t.by == by)), None)
 
 
 def log_taken(items: Iterable[TurnTaken], path: Path | None = None) -> int:
@@ -603,10 +619,11 @@ def duration_of_current_turn(
 
 
 def _workday_spans(day: date) -> list[tuple[datetime, datetime]]:
-    """`day`'s stretches of workday time (WORKDAY_SPANS), in order; none at the weekend."""
+    """`day`'s stretches of workday time (WORKDAY_SPANS, FRIDAY_SPANS on Friday), in order; none at the weekend."""
     if day.weekday() >= 5:
         return []
-    return [(datetime.combine(day, a), datetime.combine(day, b)) for a, b in WORKDAY_SPANS]
+    spans = FRIDAY_SPANS if day.weekday() == 4 else WORKDAY_SPANS
+    return [(datetime.combine(day, a), datetime.combine(day, b)) for a, b in spans]
 
 
 def is_workday(dt: datetime) -> bool:

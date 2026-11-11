@@ -38,6 +38,7 @@ import claude_runs  # noqa: E402
 import out_of_office  # noqa: E402
 import slack_bot  # noqa: E402
 import turn_announcer  # noqa: E402
+import turn_logger  # noqa: E402
 from players import PLAYERS, SLACK_PLAYERS  # noqa: E402
 from claude_runs import RunLock  # noqa: E402
 from turn_logger import TURN_LIMIT_S, TurnRecord  # noqa: E402
@@ -56,6 +57,12 @@ def turn(player: str, number: int = 10, leader: str = "LEADER_NZINGA_MBANDE") ->
 def key(rec: TurnRecord) -> str:
     """A Play button's value."""
     return json.dumps(list(rec.key))
+
+
+def start_turn(rec: TurnRecord, by: str = "player") -> None:
+    """The taken log row the turn logger writes when the player presses Start Turn (or Claude takes the seat)."""
+    taken = turn_logger.turn_watch.TurnTaken(datetime(2026, 10, 30, 10, 50), *rec.key, by)
+    assert turn_logger.log_taken([taken]) == 1
 
 
 class FakeApp:
@@ -120,6 +127,7 @@ class Bot:
         )
         monkeypatch.setattr(turn_announcer, "announce", lambda client: None)
         monkeypatch.setattr(out_of_office, "STATE_PATH", tmp_path / "out_of_office.json")
+        monkeypatch.setattr(turn_logger, "TURN_LOG_PATH", tmp_path / "turn_log.jsonl")  # and the taken log beside it
         self.lock_path = tmp_path / "claude_run.lock"
         slack_bot.register(self.app, "claude", RunLock(self.lock_path))
 
@@ -298,6 +306,63 @@ def test_click_on_a_turn_that_ended_plays_nothing(bot):
     assert not bot.runs and not bot.client.updates
 
 
+def test_no_button_while_the_player_plays_their_turn(bot):
+    rec = turn("Aidan")
+    bot.on((rec, TURN_LIMIT_S))
+    start_turn(rec)
+    bot.dm(HELDI, "whose turn is it")
+    assert "Aidan is playing it (pressed Start Turn Fri 30 Oct 10:50)" in bot.last
+    assert bot.button is None and not bot.runs
+
+
+def test_no_button_for_the_admin_either(bot):
+    rec = turn("Aidan")
+    bot.on((rec, HALF_HOUR))
+    start_turn(rec)
+    bot.dm(JOHN, "take Aidan's turn")
+    assert "Aidan is playing it" in bot.last and "as the admin" not in bot.last
+    assert bot.button is None
+
+
+def test_another_turn_started_does_not_count(bot):
+    start_turn(turn("Aidan", number=9))
+    bot.on((turn("Aidan"), TURN_LIMIT_S))
+    bot.dm(HELDI, "whose turn is it")
+    assert bot.button is not None
+
+
+def test_a_seat_claude_took_does_not_count(bot):
+    # A stand-in run holds the run lock while it lasts; one that left the turn unfinished can be tried again.
+    rec = turn("Aidan")
+    bot.on((rec, TURN_LIMIT_S))
+    start_turn(rec, by="claude")
+    bot.dm(HELDI, "whose turn is it")
+    assert bot.button is not None
+
+
+def test_click_after_the_player_pressed_start_turn_plays_nothing(bot):
+    rec = turn("Aidan")
+    bot.on((rec, TURN_LIMIT_S))
+    bot.dm(HELDI, "whose turn is it")
+    blocks = bot.replies[-1][1]["blocks"]
+    start_turn(rec)  # Aidan sits down before Heldi clicks
+    bot.click(HELDI, key(rec), blocks=blocks)
+    assert "Aidan is playing it" in bot.last
+    assert not bot.runs
+    (update,) = bot.client.updates
+    assert update["blocks"] == slack_bot.without_action(blocks, slack_bot.PLAY_ACTION)
+    assert all(e["action_id"] != slack_bot.PLAY_ACTION for b in update["blocks"] for e in b.get("elements", []))
+
+
+def test_admin_click_after_the_player_pressed_start_turn_plays_nothing(bot):
+    rec = turn("Aidan")
+    bot.on((rec, HALF_HOUR))
+    start_turn(rec)
+    bot.click(JOHN, key(rec))
+    assert "Aidan is playing it" in bot.last
+    assert not bot.runs
+
+
 def test_owner_click_is_sent_to_dm(bot):
     rec = turn("Aidan")
     bot.on((rec, HALF_HOUR))
@@ -330,6 +395,16 @@ def test_home_tab_tells_the_admin_about_the_button(bot):
     bot.on((turn("Aidan"), HALF_HOUR))
     bot.open_home(JOHN)
     assert "as the admin you can DM me for a button" in bot.home
+
+
+def test_home_tab_while_the_player_plays_their_turn(bot):
+    rec = turn("Aidan")
+    bot.on((rec, TURN_LIMIT_S))
+    start_turn(rec)
+    bot.open_home(HELDI)
+    assert "Aidan is playing it" in bot.home and "DM me for a button" not in bot.home
+    bot.open_home(JOHN)
+    assert "Aidan is playing it" in bot.home and "as the admin" not in bot.home
 
 
 def test_home_tab_without_a_game(bot):

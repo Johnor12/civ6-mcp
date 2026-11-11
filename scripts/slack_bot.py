@@ -30,6 +30,10 @@ decides who may do what; what a message means is left to Claude.
   any other player's turn without waiting for the timer. A click is checked
   the same way: before the limit only the admin's counts, so a button the
   admin got in a channel thread plays nothing for anyone else.
+- Nobody gets the button, the admin included, once the player has pressed
+  Start Turn: the taken log (scripts/data/taken_log.jsonl) says they are
+  playing it. A click on a button handed out before that is refused and the
+  button taken away.
 - That reply also carries an "out of office" button, at any time. Clicking
   it posts a vote in the game channel (scripts/out_of_office.py); when it
   passes, that service plays the player's turns for the rest of the day.
@@ -161,11 +165,13 @@ def home_view(
     current: tuple[turn_logger.TurnRecord, float] | None,
     run: Run | None,
     now: datetime | None = None,
+    playing: turn_logger.TakenRecord | None = None,
 ) -> dict:
     """The App Home tab: whose turn it is, its timer, and what the viewer can do about it.
 
     The same answers a message would get, without the button: a Home tab
     click has no conversation to reply in, so the button stays in DMs.
+    `playing` is the player's Start Turn press on the turn (being_played).
     """
     if viewer is None:
         lines = [REJECTION]
@@ -182,6 +188,8 @@ def home_view(
                 "DM me what you want done with it: a note to play the turn by, or a question "
                 "about your game. Not in a channel: the other players can read it.",
             ]
+        elif playing is not None:
+            lines = [turn_status(rec, worked, f"{name}'s"), playing_text(name, playing)]
         elif worked >= TURN_LIMIT_S:
             lines = [
                 turn_status(rec, worked, f"{name}'s"),
@@ -213,6 +221,24 @@ def home_view(
         {"type": "context", "elements": [{"type": "mrkdwn", "text": f"As of {(now or datetime.now()):%a %d %b %H:%M}."}]},
     ]
     return {"type": "home", "blocks": blocks}
+
+
+def being_played(rec: turn_logger.TurnRecord) -> turn_logger.TakenRecord | None:
+    """The player's own Start Turn press on the turn (its taken log row), or None while they have not pressed it.
+
+    While the player is playing their turn nobody can have it played for
+    them, the admin included. A seat Claude took does not count: a run in
+    progress holds the run lock, and one that left the turn unfinished can
+    be tried again.
+    """
+    return turn_logger.turn_taken(rec.key, by=turn_logger.turn_watch.PLAYER)
+
+
+def playing_text(name: str, playing: turn_logger.TakenRecord) -> str:
+    return (
+        f"{name} is playing it (pressed Start Turn {playing.at:%a %d %b %H:%M}), "
+        "so nobody can have me play it for them."
+    )
 
 
 def play_button(rec: turn_logger.TurnRecord, name: str) -> dict:
@@ -310,8 +336,9 @@ def register(app: App, claude: str, lock: RunLock) -> None:
         """Put whose turn it is, and what the viewer may do about it, on their Home tab."""
         viewer = SLACK_PLAYERS.get(user)
         current = whose_turn() if viewer else None
+        playing = being_played(current[0]) if current else None
         try:
-            client.views_publish(user_id=user, view=home_view(viewer, current, lock.current))
+            client.views_publish(user_id=user, view=home_view(viewer, current, lock.current, playing=playing))
         except Exception as exc:
             log.warning("home view for %s failed: %s", user, exc)
 
@@ -380,6 +407,18 @@ def register(app: App, claude: str, lock: RunLock) -> None:
                 return
             if owner == sender:
                 reply("It's your turn: DM me what you want done with it.")
+                return
+            if (playing := being_played(rec)) is not None:
+                # The button went out before Start Turn was pressed; it can never play this turn now.
+                name = owner.name if owner else rec.player
+                client.chat_update(
+                    channel=body["channel"]["id"],
+                    ts=message["ts"],
+                    text=message.get("text", ""),
+                    blocks=without_action(message.get("blocks") or [], PLAY_ACTION),
+                )
+                status = turn_status(rec, worked, f"{name}'s")
+                reply(f"{status} {playing_text(name, playing)}")
                 return
             if worked < TURN_LIMIT_S and not sender.admin:
                 # The admin's button in a channel thread is visible to everyone.
@@ -514,14 +553,17 @@ def register(app: App, claude: str, lock: RunLock) -> None:
     def other_turn(sender: Player, owner: Player | None, rec, worked: float, reply) -> None:
         """Another player: the turn's timer, and once it has run out a button to have the turn played.
 
-        The admin gets the button before the timer runs out as well. Anyone
+        The admin gets the button before the timer runs out as well; nobody
+        gets it while the player is playing the turn (being_played). Anyone
         gets the out-of-office button, unless a vote on this turn is open or
         the player is out already.
         """
         name = owner.name if owner else rec.player
         status = turn_status(rec, worked, f"{name}'s")
         buttons = []
-        if worked >= TURN_LIMIT_S:
+        if (playing := being_played(rec)) is not None:
+            text = f"{status} {playing_text(name, playing)}"
+        elif worked >= TURN_LIMIT_S:
             text = f"{status} That's past the {duration(TURN_LIMIT_S)} limit, so you can have me play it for {name}."
             buttons.append(play_button(rec, name))
         elif sender.admin:

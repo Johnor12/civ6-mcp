@@ -121,13 +121,18 @@ only decides who may do what; what a message means is up to Claude.
   since the other players read the channel.
 - **Someone else's turn: DM or mention the bot.** You get whose turn it is
   and how long it has lasted. Once that is 1 hour of workday time
-  (9:00–17:00, Mon–Fri, not counting the 12:15–12:45 grace period), the
+  (9:00–17:00, Mon–Fri, Fridays until 16:00, not counting the 12:15–12:45
+  grace period), the
   reply has a "Play Cameron's turn" button;
   clicking it (and confirming) has Claude play the turn from a fixed
   prompt. Nothing you wrote reaches Claude. The absent player gets the
   progress and Claude's report by DM; you only hear whose turn it is
   afterwards. A button left over from a turn that has since ended does
   nothing.
+- **A turn being played can't be taken over.** Once Cameron has pressed
+  Start Turn (the taken log has it), nobody gets the button, the admin
+  included: the reply says Cameron is playing it. A button handed out
+  before the press is refused and removed when clicked.
 - **Admin.** The player marked `admin=True` in `PLAYERS` (John) gets that
   button on anyone else's turn without waiting for the hour, and is the
   only one whose click counts before then. Claude is told the admin asked
@@ -185,7 +190,9 @@ and what the viewer can do about it), and an invite to
   Turn to the end of the turn, marked when Claude took it) where the taken
   log has one; a reminder after 30 minutes of workday time; and after 1 hour a last
   one saying any other player can now have the turn played through the
-  bot. Each message gives today's turns (how many player-turns have ended
+  bot. Neither reminder goes out once the player has pressed Start Turn
+  (or Claude has taken the seat): the taken log says the turn is being
+  played. Each message gives today's turns (how many player-turns have ended
   today, as the daily report counts them against the record) so the
   channel can see how close the day is to a new one. The bot calls it
   right after each of its runs, so a turn the bot ended reaches the next
@@ -196,7 +203,7 @@ and what the viewer can do about it), and an invite to
   #proj-diplomatic-relations at 9:00 every workday: how many turns were
   taken the previous workday, the average turn and every player's average
   that day, then the same since the log began, all in workday time
-  (9:00–17:00 Mon–Fri, less the 12:15–12:45 grace period) and slowest first. Beside each average is the play
+  (9:00–17:00 Mon–Fri, Fridays until 16:00, less the 12:15–12:45 grace period) and slowest first. Beside each average is the play
   time, from Start Turn to its end; turns Claude took count for
   the player's total but get a line of their own for the play time. `--print` shows the message, `--now` posts
   it at once. The figures come from `scripts/turn_times.py`, which

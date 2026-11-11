@@ -98,8 +98,13 @@ class TestWorkdayHours:
         assert turn_logger.workday_seconds(_at(0, 16), _at(1, 10)) == 2 * 3600
 
     def test_weekend_does_not_count(self):
-        # Friday 16:30 to Monday 9:45: half an hour, then three quarters.
-        assert turn_logger.workday_seconds(_at(4, 16, 30), _at(7, 9, 45)) == 75 * 60
+        # Friday 15:30 to Monday 9:45: half an hour (Friday ends at 16:00), then three quarters.
+        assert turn_logger.workday_seconds(_at(4, 15, 30), _at(7, 9, 45)) == 75 * 60
+
+    def test_friday_ends_at_four(self):
+        assert turn_logger.workday_seconds(_at(4, 15), _at(4, 18)) == 3600
+        assert turn_logger.workday_seconds(_at(3, 15), _at(3, 18)) == 2 * 3600  # Thursday: until 17:00
+        assert turn_logger.workday_seconds(_at(4, 16, 30), _at(7, 9, 45)) == 45 * 60
 
     def test_evening_to_morning_is_nothing(self):
         assert turn_logger.workday_seconds(_at(0, 18), _at(1, 9)) == 0
@@ -114,8 +119,10 @@ class TestWorkdayHours:
         assert turn_logger.workday_deadline(_at(0, 20), 0) == _at(1, 9)
 
     def test_deadline_skips_nights_and_weekends(self):
-        # Friday 16:30: half an hour on Friday, the rest on Monday.
-        assert turn_logger.workday_deadline(_at(4, 16, 30), 2 * 3600) == _at(7, 10, 30)
+        # Friday 15:30: half an hour on Friday (until 16:00), the rest on Monday.
+        assert turn_logger.workday_deadline(_at(4, 15, 30), 2 * 3600) == _at(7, 10, 30)
+        assert turn_logger.workday_deadline(_at(4, 16, 30), 3600) == _at(7, 10)
+        assert turn_logger.workday_deadline(_at(4, 15), 3600) == _at(4, 16)
         assert turn_logger.workday_deadline(_at(0, 16), 3600) == _at(0, 17)
 
     def test_deadline_skips_the_grace_period(self):
@@ -131,7 +138,9 @@ class TestWorkdayHours:
 
     def test_is_workday(self):
         assert turn_logger.is_workday(_at(0, 9))
-        assert turn_logger.is_workday(_at(4, 16, 59))
+        assert turn_logger.is_workday(_at(3, 16, 59))
+        assert turn_logger.is_workday(_at(4, 15, 59))
+        assert not turn_logger.is_workday(_at(4, 16))
         assert not turn_logger.is_workday(_at(0, 8, 59))
         assert not turn_logger.is_workday(_at(0, 17))
         assert not turn_logger.is_workday(_at(5, 12))
@@ -141,7 +150,7 @@ class TestWorkdayHours:
         assert turn_logger.is_workday(_at(0, 12, 45))
 
     def test_workday_text_names_the_grace_period(self):
-        assert turn_logger.WORKDAY == "9:00–12:15, 12:45–17:00, Mon–Fri"
+        assert turn_logger.WORKDAY == "9:00–12:15, 12:45–17:00, Mon–Fri (Fri until 16:00)"
 
 
 class TestRecords:
