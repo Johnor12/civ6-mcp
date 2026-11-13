@@ -192,7 +192,8 @@ and what the viewer can do about it), and an invite to
   one saying any other player can now have the turn played through the
   bot. No reminder goes out once the player has pressed Start Turn
   (or Claude has taken the seat): the taken log says the turn is being
-  played. Each message gives today's turns (how many player-turns have ended
+  played. Players can opt out of single messages (`OPTED_OUT` in the
+  announcer): Hunter gets no 15-minute reminder. Each message gives today's turns (how many player-turns have ended
   today, as the daily report counts them against the record) so the
   channel can see how close the day is to a new one. The bot calls it
   right after each of its runs, so a turn the bot ended reaches the next

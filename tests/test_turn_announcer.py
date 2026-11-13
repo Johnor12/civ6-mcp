@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+import players  # noqa: E402
 import turn_announcer  # noqa: E402
 import turn_logger  # noqa: E402
 
@@ -307,6 +308,35 @@ class TestReminders:
         _taken(_at(0, 10))
         assert _check(slack, _at(0, 10, 1))
         assert slack.posts[-1].startswith(f"<@{RANDY}> it's your turn")
+
+    def test_hunter_gets_no_fifteen_minute_reminder_but_the_rest(self, slack, caplog):
+        caplog.set_level("INFO", logger="turn_announcer")
+        _turn(_at(0, 10), player="Hunter", leader="LEADER_AMANITORE")
+        assert _check(slack, _at(0, 10, 1))
+        assert slack.posts[-1].startswith(f"<@{HUNTER}> it's your turn")
+        calls = slack.history_calls
+        assert not _check(slack, _at(0, 10, 15))
+        assert slack.history_calls == calls  # Slack is not even asked
+        assert "no 15m message for Hunter, who opted out of it" in caplog.text
+        assert not _check(slack, _at(0, 10, 16))
+        assert _check(slack, _at(0, 10, 30))
+        assert slack.posts[-1].startswith(f"<@{HUNTER}> reminder: your turn (today's turns: 0) has been waiting 30m")
+        assert _check(slack, _at(0, 11))
+        assert "through this app" in slack.posts[-1]
+        assert len(slack.posts) == 3
+
+    def test_an_opt_out_is_one_players_only(self, slack):
+        _turn(_at(0, 10))  # Randy
+        assert _check(slack, _at(0, 10, 1))
+        assert _check(slack, _at(0, 10, 15))
+        assert "waiting 15m" in slack.posts[-1]
+
+    def test_opt_outs_name_real_players_and_messages(self):
+        names = {p.name for p in players.PLAYERS}
+        stages = {after for after, _ in turn_announcer.STAGES}
+        for name, skipped in turn_announcer.OPTED_OUT.items():
+            assert name in names, name
+            assert skipped <= stages, (name, skipped - stages)
 
     def test_the_clock_runs_in_workday_hours_only(self, slack):
         _turn(_at(4, 15, 50))  # Friday afternoon; Friday ends at 16:00

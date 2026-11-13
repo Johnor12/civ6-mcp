@@ -48,6 +48,9 @@ logger) has a row for it when the player has pressed Start Turn or Claude
 has taken the seat, and a player already playing has no use for a nudge.
 The start-of-turn message still goes out, for the list it carries.
 
+A player can opt out of single messages (OPTED_OUT, by the stage's workday
+time): Hunter gets no 15-minute reminder, but the 30-minute one and the rest.
+
 Only the latest message due is sent, so a turn found an hour in gets the
 one-hour message alone. A reminder counts as sent when the bot has @'d the
 player in the channel after it fell due, so a restart sends nothing twice.
@@ -87,6 +90,12 @@ CHANNEL = "C09AZ6CR7QE"  # #proj-diplomatic-relations
 POLL_S = 1  # how often the turn log is read; Slack is called only when a message falls due
 RETRY_S = 60  # after a failure (Slack down, rate-limited), how long before the next try
 REMINDERS_S = (900, 1800)  # workday time before each reminder
+# Messages a player asked not to get: their name in PLAYERS -> the workday
+# seconds of those messages (STAGES: 0, REMINDERS_S, TURN_LIMIT_S). When one
+# falls due it is skipped as if it had gone out; the player still gets the rest.
+OPTED_OUT: dict[str, frozenset[int]] = {
+    "Hunter": frozenset({900}),  # no 15m reminder (asked 2026-11-13)
+}
 LOOKBACK_S = 24 * 3600  # how far back the turn message looks for the bot's last post
 HAND_PING_S = 60  # a mention this long before the turn began counts as the hand ping
 LOCK_PATH = REPO_ROOT / "scripts" / "data" / "turn_announcer.lock"
@@ -165,6 +174,10 @@ def _announce(client, now: datetime) -> bool:
         return False
 
     after, template = STAGES[stage]
+    if after in OPTED_OUT.get(player.name, ()):
+        log.info("turn %d: no %s message for %s, who opted out of it", rec.turn, duration(after), player.name)
+        _sent.add((rec.key, stage))
+        return False
     if stage == 0:
         # The player who finished often pings the next one just before
         # ending the turn, so before this turn began.
