@@ -188,9 +188,9 @@ and what the viewer can do about it), and an invite to
   (workday time from the turn's start to its end, plus play time outside
   the workday, as the daily report counts it), plus its play time (Start
   Turn to the end of the turn, marked when Claude took it) where the taken
-  log has one; a reminder after 30 minutes of workday time; and after 1 hour a last
+  log has one; reminders after 15 and 30 minutes of workday time; and after 1 hour a last
   one saying any other player can now have the turn played through the
-  bot. Neither reminder goes out once the player has pressed Start Turn
+  bot. No reminder goes out once the player has pressed Start Turn
   (or Claude has taken the seat): the taken log says the turn is being
   played. Each message gives today's turns (how many player-turns have ended
   today, as the daily report counts them against the record) so the

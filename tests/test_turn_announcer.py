@@ -212,9 +212,12 @@ class TestRecentTurns:
 
 
 class TestReminders:
-    def test_half_an_hour_then_an_hour(self, slack):
+    def test_fifteen_minutes_half_an_hour_then_an_hour(self, slack):
         _turn(_at(0, 10))
         assert _check(slack, _at(0, 10, 1))
+        assert not _check(slack, _at(0, 10, 14))
+        assert _check(slack, _at(0, 10, 15))
+        assert slack.posts[-1].startswith(f"<@{RANDY}> reminder: your turn (today's turns: 0) has been waiting 15m")
         assert not _check(slack, _at(0, 10, 25))
         assert _check(slack, _at(0, 10, 30))
         assert slack.posts[-1].startswith(f"<@{RANDY}> reminder: your turn (today's turns: 0) has been waiting 30m")
@@ -223,6 +226,16 @@ class TestReminders:
         assert slack.posts[-1].startswith(f"<@{RANDY}> your turn (today's turns: 0) has been waiting 1h")
         assert "any other player can now have it played for you through this app" in slack.posts[-1]
         assert not _check(slack, _at(0, 13))
+        assert len(slack.posts) == 4
+
+    def test_the_fifteen_minute_reminder_does_not_count_for_the_half_hour(self, slack):
+        # A restart at 10:31 must still send the 30m reminder: the 15m one fell due before it.
+        _turn(_at(0, 10))
+        assert _check(slack, _at(0, 10, 1))
+        assert _check(slack, _at(0, 10, 15))
+        turn_announcer._sent.clear()
+        assert _check(slack, _at(0, 10, 31))
+        assert "waiting 30m" in slack.posts[-1]
         assert len(slack.posts) == 3
 
     def test_only_the_bots_own_mention_counts_as_a_reminder(self, slack):
@@ -259,13 +272,14 @@ class TestReminders:
         assert slack.history_calls == calls  # Slack is not even asked
         assert "no 1h message for Randy, who pressed Start Turn at 10:58:00" in caplog.text
 
-    def test_a_turn_taken_after_the_first_reminder_gets_no_second(self, slack):
+    def test_a_turn_taken_after_the_first_reminder_gets_no_more(self, slack):
         _turn(_at(0, 10))
         assert _check(slack, _at(0, 10, 1))
-        assert _check(slack, _at(0, 10, 30))
-        _taken(_at(0, 10, 40))
+        assert _check(slack, _at(0, 10, 15))
+        _taken(_at(0, 10, 20))
+        assert not _check(slack, _at(0, 10, 30))
         assert not _check(slack, _at(0, 11))
-        assert len(slack.posts) == 2 and "reminder" in slack.posts[-1]
+        assert len(slack.posts) == 2 and "waiting 15m" in slack.posts[-1]
 
     def test_no_reminder_while_claude_plays_the_turn(self, slack, caplog):
         caplog.set_level("INFO", logger="turn_announcer")
@@ -295,11 +309,11 @@ class TestReminders:
         assert slack.posts[-1].startswith(f"<@{RANDY}> it's your turn")
 
     def test_the_clock_runs_in_workday_hours_only(self, slack):
-        _turn(_at(4, 15, 45))  # Friday afternoon; Friday ends at 16:00
-        assert _check(slack, _at(4, 15, 46))
-        assert not _check(slack, _at(7, 9, 10))  # Monday: 25 min so far
-        assert _check(slack, _at(7, 9, 15))
-        assert "reminder" in slack.posts[-1]
+        _turn(_at(4, 15, 50))  # Friday afternoon; Friday ends at 16:00
+        assert _check(slack, _at(4, 15, 51))
+        assert not _check(slack, _at(7, 9, 4))  # Monday: 14 min so far
+        assert _check(slack, _at(7, 9, 5))
+        assert "waiting 15m" in slack.posts[-1]
 
 
 class TestFailures:

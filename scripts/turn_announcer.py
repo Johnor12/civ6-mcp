@@ -37,11 +37,12 @@ the one before: a turn finished overnight adds to its count.
   Turn to its end, at any hour) has it in brackets, marked when Claude took
   the turn. Without a post of its own in the last LOOKBACK_S, the turns of
   that stretch are listed.
-- After REMINDER_S of workday time: a reminder from the bot.
+- After each of REMINDERS_S (15 and 30 minutes) of workday time: a reminder
+  from the bot.
 - After turn_logger.TURN_LIMIT_S: a last message from the bot, saying any
   other player can now have the turn played through the Slack bot.
 
-Neither reminder goes out once the turn has been taken: the taken log
+No reminder goes out once the turn has been taken: the taken log
 (scripts/data/taken_log.jsonl, beside the turn log, also kept by the turn
 logger) has a row for it when the player has pressed Start Turn or Claude
 has taken the seat, and a player already playing has no use for a nudge.
@@ -85,7 +86,7 @@ log = logging.getLogger("turn_announcer")
 CHANNEL = "C09AZ6CR7QE"  # #proj-diplomatic-relations
 POLL_S = 1  # how often the turn log is read; Slack is called only when a message falls due
 RETRY_S = 60  # after a failure (Slack down, rate-limited), how long before the next try
-REMINDER_S = 1800  # workday time before the first reminder
+REMINDERS_S = (900, 1800)  # workday time before each reminder
 LOOKBACK_S = 24 * 3600  # how far back the turn message looks for the bot's last post
 HAND_PING_S = 60  # a mention this long before the turn began counts as the hand ping
 LOCK_PATH = REPO_ROOT / "scripts" / "data" / "turn_announcer.lock"
@@ -93,16 +94,15 @@ SAVES_DIR: Path | None = None  # hotseat save folder for turn_times; None is the
 
 # (workday seconds into the turn, message); the last one due is sent.
 # {today} is today's turn count (see todays_turns); {recent} is the finished
-# turns since the bot's last post (see recent_turns).
+# turns since the bot's last post (see recent_turns); {waited} is the stage's
+# own workday time.
+REMINDER = (
+    "{mention} reminder: your turn{today} has been waiting {waited} of workday time "
+    "({workday}). After {limit} any other player can have me play it for you."
+)
 STAGES = (
     (0, "{mention} it's your turn{today}.{recent}"),
-    (
-        REMINDER_S,
-        (
-            "{mention} reminder: your turn{today} has been waiting {waited} of workday time "
-            "({workday}). After {limit} any other player can have me play it for you."
-        ),
-    ),
+    *((after, REMINDER) for after in REMINDERS_S),
     (
         TURN_LIMIT_S,
         (
@@ -179,7 +179,7 @@ def _announce(client, now: datetime) -> bool:
                 mention=f"<@{player.slack_id}>",
                 today=todays_turns(seq, now),
                 recent=recent_turns(client, seq, now) if stage == 0 else "",
-                waited=duration(REMINDER_S),
+                waited=duration(after),
                 limit=duration(TURN_LIMIT_S),
                 workday=WORKDAY,
             )
@@ -315,8 +315,8 @@ def main() -> None:
         raise SystemExit(f"SLACK_BOT_TOKEN must be set in {REPO_ROOT / '.env'}")
     client = WebClient(token=token)
     log.info(
-        "reading the turn log every %d s; channel %s; reminders after %s and %s of workday time",
-        POLL_S, CHANNEL, duration(REMINDER_S), duration(TURN_LIMIT_S),
+        "reading the turn log every %d s; channel %s; reminders after %s of workday time",
+        POLL_S, CHANNEL, ", ".join(duration(after) for after, _ in STAGES[1:]),
     )
     while True:
         announce(client)
