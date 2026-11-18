@@ -350,8 +350,8 @@ def test_click_after_the_player_pressed_start_turn_plays_nothing(bot):
     assert "Aidan is playing it" in bot.last
     assert not bot.runs
     (update,) = bot.client.updates
-    assert update["blocks"] == slack_bot.without_action(blocks, slack_bot.PLAY_ACTION)
-    assert all(e["action_id"] != slack_bot.PLAY_ACTION for b in update["blocks"] for e in b.get("elements", []))
+    # Both buttons go: Aidan is plainly not out of office either.
+    assert [b["type"] for b in update["blocks"]] == ["section"]
 
 
 def test_admin_click_after_the_player_pressed_start_turn_plays_nothing(bot):
@@ -500,6 +500,29 @@ def test_out_of_office_click_from_a_stranger_is_refused(bot):
     bot.on((rec, HALF_HOUR))
     bot.click("U000STRANGER", key(rec), action=out_of_office.VOTE_ACTION)
     assert bot.last == slack_bot.REJECTION and not bot.votes
+
+
+def test_no_vote_button_while_the_player_plays_their_turn(bot):
+    rec = turn("Aidan")
+    bot.on((rec, HALF_HOUR))
+    start_turn(rec)
+    bot.mention(HELDI, "whose turn is it")
+    assert "Aidan is playing it (pressed Start Turn Fri 30 Oct 10:50)" in bot.last
+    assert "out of office" not in bot.last
+    assert bot.away_button is None and bot.button is None
+
+
+def test_vote_click_after_the_player_pressed_start_turn_opens_nothing(bot):
+    rec = turn("Aidan")
+    bot.on((rec, TURN_LIMIT_S))
+    bot.dm(HELDI, "whose turn is it")
+    blocks = bot.replies[-1][1]["blocks"]
+    start_turn(rec)  # Aidan sits down before Heldi clicks
+    bot.click(HELDI, key(rec), action=out_of_office.VOTE_ACTION, blocks=blocks)
+    assert "Aidan is playing it (pressed Start Turn Fri 30 Oct 10:50), so they are not out of office." in bot.last
+    assert not bot.votes and out_of_office.vote_on(rec.key) is None
+    (update,) = bot.client.updates
+    assert [b["type"] for b in update["blocks"]] == ["section"]  # the Play button is dead too
 
 
 def test_no_vote_button_for_a_player_already_out(bot):

@@ -33,12 +33,13 @@ decides who may do what; what a message means is left to Claude.
 - Nobody gets the button, the admin included, once the player has pressed
   Start Turn: the taken log (scripts/data/taken_log.jsonl) says they are
   playing it. A click on a button handed out before that is refused and the
-  button taken away.
-- That reply also carries an "out of office" button, at any time. Clicking
-  it posts a vote in the game channel (scripts/out_of_office.py); when it
-  passes, that service plays the player's turns for the rest of the day.
-  The player's DM then has an "I'm back" button, which the bot answers by
-  ending their day out of office.
+  buttons taken away.
+- That reply also carries an "out of office" button, until the player
+  presses Start Turn (then they are clearly in). Clicking it posts a vote
+  in the game channel (scripts/out_of_office.py); when it passes, that
+  service plays the player's turns for the rest of the day. The player's DM
+  then has an "I'm back" button, which the bot answers by ending their day
+  out of office.
 - The app's Home tab is a status page: whose turn it is, its timer and what
   the viewer may do about it. It is published each time the tab is opened
   and when its Refresh button is pressed; the button to play a turn stays
@@ -234,11 +235,8 @@ def being_played(rec: turn_logger.TurnRecord) -> turn_logger.TakenRecord | None:
     return turn_logger.turn_taken(rec.key, by=turn_logger.turn_watch.PLAYER)
 
 
-def playing_text(name: str, playing: turn_logger.TakenRecord) -> str:
-    return (
-        f"{name} is playing it (pressed Start Turn {playing.at:%a %d %b %H:%M}), "
-        "so nobody can have me play it for them."
-    )
+def playing_text(name: str, playing: turn_logger.TakenRecord, so: str = "nobody can have me play it for them") -> str:
+    return f"{name} is playing it (pressed Start Turn {playing.at:%a %d %b %H:%M}), so {so}."
 
 
 def play_button(rec: turn_logger.TurnRecord, name: str) -> dict:
@@ -282,12 +280,12 @@ def away_button(rec: turn_logger.TurnRecord, name: str) -> dict:
     }
 
 
-def without_action(blocks: list[dict], action_id: str) -> list[dict]:
-    """A message's blocks minus one button; an actions block left empty goes too."""
+def without_action(blocks: list[dict], *action_ids: str) -> list[dict]:
+    """A message's blocks minus these buttons; an actions block left empty goes too."""
     kept = []
     for block in blocks:
         if block.get("type") == "actions":
-            elements = [e for e in block.get("elements", []) if e.get("action_id") != action_id]
+            elements = [e for e in block.get("elements", []) if e.get("action_id") not in action_ids]
             if not elements:
                 continue
             block = {**block, "elements": elements}
@@ -409,13 +407,13 @@ def register(app: App, claude: str, lock: RunLock) -> None:
                 reply("It's your turn: DM me what you want done with it.")
                 return
             if (playing := being_played(rec)) is not None:
-                # The button went out before Start Turn was pressed; it can never play this turn now.
+                # The buttons went out before Start Turn was pressed; neither can do anything for this turn now.
                 name = owner.name if owner else rec.player
                 client.chat_update(
                     channel=body["channel"]["id"],
                     ts=message["ts"],
                     text=message.get("text", ""),
-                    blocks=without_action(message.get("blocks") or [], PLAY_ACTION),
+                    blocks=without_action(message.get("blocks") or [], PLAY_ACTION, out_of_office.VOTE_ACTION),
                 )
                 status = turn_status(rec, worked, f"{name}'s")
                 reply(f"{status} {playing_text(name, playing)}")
@@ -462,7 +460,7 @@ def register(app: App, claude: str, lock: RunLock) -> None:
             if current is None:
                 reply(NO_GAME)
                 return
-            rec, _ = current
+            rec, worked = current
             owner = player_named(rec.player)
             name = owner.name if owner else rec.player
             channel = f"<#{out_of_office.CHANNEL}>"
@@ -474,6 +472,17 @@ def register(app: App, claude: str, lock: RunLock) -> None:
                 return
             if owner is None:
                 reply(f"{name} isn't on Slack, so there's nobody to ask.")
+                return
+            if (playing := being_played(rec)) is not None:
+                # The button went out before Start Turn was pressed: the player is plainly not out of office.
+                client.chat_update(
+                    channel=body["channel"]["id"],
+                    ts=message["ts"],
+                    text=message.get("text", ""),
+                    blocks=without_action(message.get("blocks") or [], PLAY_ACTION, out_of_office.VOTE_ACTION),
+                )
+                status = turn_status(rec, worked, f"{name}'s")
+                reply(f"{status} {playing_text(name, playing, so='they are not out of office')}")
                 return
             if out_of_office.is_away(owner.name):
                 reply(f"{name} is already out of office today: I'm playing their turns.")
@@ -555,8 +564,8 @@ def register(app: App, claude: str, lock: RunLock) -> None:
 
         The admin gets the button before the timer runs out as well; nobody
         gets it while the player is playing the turn (being_played). Anyone
-        gets the out-of-office button, unless a vote on this turn is open or
-        the player is out already.
+        gets the out-of-office button, unless a vote on this turn is open,
+        the player is out already, or they are playing the turn.
         """
         name = owner.name if owner else rec.player
         status = turn_status(rec, worked, f"{name}'s")
@@ -586,7 +595,7 @@ def register(app: App, claude: str, lock: RunLock) -> None:
                     f" A vote on {name} being out of office is open in "
                     f"<#{out_of_office.CHANNEL}> until {out_of_office.closes_at(vote):%H:%M}."
                 )
-            else:
+            elif playing is None:
                 text += f" If {name} is out of office, you can start a vote to have me play their turns today."
                 buttons.append(away_button(rec, name))
         if not buttons:
