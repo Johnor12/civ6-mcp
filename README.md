@@ -200,13 +200,28 @@ and what the viewer can do about it), and an invite to
   player at once; a turn
   ended at the PC is noticed within a minute. The bot itself only answers
   messages.
-- **Turn report.** `scripts/turn_report.py` posts in
-  #proj-diplomatic-relations at 9:00 every workday: how many turns were
-  taken the previous workday, the average turn and every player's average
-  that day, then the same since the log began, all in workday time
-  (9:00–17:00 Mon–Fri, Fridays until 16:00, less the 12:15–12:45 grace period) and slowest first. Beside each average is the play
-  time, from Start Turn to its end; turns Claude took count for
-  the player's total but get a line of their own for the play time. `--print` shows the message, `--now` posts
+- **Turn report.** At 9:00 every workday `scripts/turn_report.py`
+  refreshes the turn times dashboard, an artifact on claude.ai
+  (`ARTIFACT_URL` in the script), and posts one sentence about the
+  previous workday with its link in #proj-diplomatic-relations. The page
+  shows the previous workday (turns, average turn and play time, who had
+  the turn hour by hour, every player's averages, the day's extremes),
+  then every workday so far (turns taken, average times, each player day
+  by day) and the whole game (most and fewest turns in a day, records,
+  every player's averages), in workday time
+  (9:00–17:00 Mon–Fri, Fridays until 16:00, less the 12:15–12:45 grace period). Play
+  time runs from Start Turn to the turn's end; turns Claude took count for
+  the player's turn time but are counted on their own for the play time.
+  The script works out every number and writes them to
+  `scripts/data/turn_report.json`; the page (`scripts/turn_report_page.html`
+  is its source, stored on the artifact as `files/index.html`) is fixed and
+  draws whatever that file holds. Only a Claude Code session can write to
+  an artifact, and `claude -p` cannot, so the script starts a background
+  session (`claude --bg`) that follows `scripts/turn_report_refresh.md`:
+  upload the file, point the dashboard at it, delete the old one. The
+  dashboard is private until its owner shares it from the page's Share
+  menu. `--print` shows the Slack message, `--data` only writes the file,
+  `--refresh` refreshes the page without posting, `--now` posts
   it at once. The figures come from `scripts/turn_times.py`, which
   rebuilds every player-turn since the log began from the seat order,
   fills in the players a poll skipped (every 5 minutes until 29 Oct 2026,

@@ -1,0 +1,698 @@
+<meta name="dash-one-writer">
+<style>
+  /* Layout: one column read top to bottom. Yesterday first, then day by day, then the whole game. */
+  .tt { display: flex; flex-direction: column; gap: 36px; color: var(--color-fg); font-family: var(--font-anthropic-sans); font-size: var(--cds-font-size-body); font-variant-numeric: tabular-nums; }
+  .tt-head { display: flex; flex-direction: column; gap: 8px; }
+  .tt-title { font-family: var(--font-anthropic-serif); font-weight: 400; font-size: var(--cds-font-size-title); margin: 0; text-wrap: balance; }
+  .tt-lede { margin: 0; max-width: 68ch; }
+  .tt-quiet { margin: 0; color: var(--color-fg-muted); font-size: var(--cds-font-size-caption); max-width: 75ch; }
+  .tt-section { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+  .tt-h2 { font-size: var(--cds-font-size-heading); font-weight: var(--cds-font-weight-medium); margin: 0; padding-bottom: 8px; border-bottom: 1px solid var(--color-border-line); }
+  .tt-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+  .tt-tile { background: var(--color-panel); border: 1px solid var(--color-border-line); border-radius: var(--cds-radius); padding: var(--cds-pad-lg); display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+  .tt-tile-label { color: var(--color-fg-muted); font-size: var(--cds-font-size-caption); }
+  .tt-tile-value { font-family: var(--font-anthropic-serif); font-weight: 400; font-size: 1.75rem; line-height: 1.15; }
+  .tt-tile-sub { color: var(--color-fg-muted); font-size: var(--cds-font-size-caption); }
+  .tt-good { color: var(--color-ok); }
+  .tt-bad { color: var(--color-bad); }
+  .tt-fig { display: flex; flex-direction: column; gap: 8px; min-width: 0; margin: 0; }
+  .tt-fig-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 16px; }
+  .tt-fig-title { font-weight: var(--cds-font-weight-medium); margin: 0; font-size: var(--cds-font-size-body); }
+  .tt-pair { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 24px 32px; }
+  .tt-chart { position: relative; min-width: 0; }
+  .tt-chart svg { display: block; overflow: visible; }
+  .tt-chart text { font-family: var(--font-anthropic-sans); font-size: var(--cds-font-size-caption); fill: var(--cds-text-secondary); }
+  .tt-chart text.tt-ink { fill: var(--color-fg); }
+  .tt-chart text.tt-halo { paint-order: stroke; stroke: var(--color-bg); stroke-width: 4px; stroke-linejoin: round; }
+  .tt-h-timeline { min-height: 250px; }
+  .tt-h-days { min-height: 180px; }
+  .tt-h-bars { min-height: 200px; }
+  .tt-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; color: var(--cds-text-secondary); font-size: var(--cds-font-size-caption); }
+  .tt-key { display: inline-flex; align-items: center; gap: 6px; }
+  .tt-swatch { width: 10px; height: 10px; border-radius: 2px; display: inline-block; background: var(--cds-chart-muted); }
+  .tt-bars { display: grid; grid-template-columns: max-content minmax(40px, 1fr) max-content max-content; column-gap: 10px; row-gap: 7px; align-items: center; }
+  .tt-bar-row { display: contents; }
+  .tt-bar-track { height: 14px; min-width: 0; }
+  .tt-bar-fill { height: 100%; min-width: 2px; border-radius: 0 4px 4px 0; }
+  .tt-bar-val { text-align: right; white-space: nowrap; }
+  .tt-bar-n { color: var(--color-fg-muted); font-size: var(--cds-font-size-caption); white-space: nowrap; }
+  .tt-none { color: var(--color-fg-muted); }
+  .tt-records { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px 24px; }
+  .tt-record { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+  .tt-record-what { color: var(--color-fg-muted); font-size: var(--cds-font-size-caption); }
+  .tt-record-time { font-weight: var(--cds-font-weight-medium); }
+  .tt-record-who { color: var(--color-fg-muted); font-size: var(--cds-font-size-caption); }
+  .tt-minis { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 14px 20px; position: relative; }
+  .tt-mini { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+  .tt-mini-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; font-size: var(--cds-font-size-caption); }
+  .tt-mini-name { font-weight: var(--cds-font-weight-medium); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tt-mini-val { color: var(--color-fg-muted); white-space: nowrap; }
+  .tt-tip { position: absolute; z-index: 5; pointer-events: none; background: var(--cds-surface-popover); border: 1px solid var(--cds-border); box-shadow: var(--cds-shadow-popover); border-radius: var(--cds-radius); padding: 6px 9px; font-size: var(--cds-font-size-caption); color: var(--cds-text-secondary); width: max-content; max-width: min(260px, 92%); }
+  .tt-tip-h { color: var(--color-fg); font-weight: var(--cds-font-weight-medium); }
+  .tt-scroll { overflow-x: auto; }
+  .tt-table { border-collapse: collapse; width: 100%; font-size: var(--cds-font-size-caption); }
+  .tt-table th, .tt-table td { padding: 6px 10px; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--color-border-line); }
+  .tt-table th { color: var(--color-fg-muted); font-weight: var(--cds-font-weight-medium); }
+  .tt-table th:first-child, .tt-table td:first-child { text-align: left; padding-left: 0; }
+  .tt-details summary { cursor: pointer; font-weight: var(--cds-font-weight-medium); }
+  .tt-details > div, .tt-details > p { margin: 12px 0 0; }
+  .tt-notes { display: flex; flex-direction: column; gap: 8px; max-width: 75ch; color: var(--color-fg-muted); font-size: var(--cds-font-size-caption); }
+  .tt-notes p { margin: 0; }
+  .tt-notes b { color: var(--color-fg); font-weight: var(--cds-font-weight-medium); }
+</style>
+
+<div class="tt">
+  <header class="tt-head">
+    <h1 class="tt-title" id="title">Turn times</h1>
+    <p class="tt-lede" id="headline"><span data-draw="headline" data-source="info" data-field="headline" data-row="0">—</span></p>
+    <p class="tt-quiet" id="now">When this was written the game was on turn <span data-draw="now-turn" data-source="info" data-field="now_turn" data-row="0">—</span>, waiting on <span data-draw="now-player" data-source="info" data-field="now_player" data-row="0">—</span> since <span data-draw="now-since" data-source="info" data-field="now_since" data-row="0">—</span>.</p>
+  </header>
+
+  <section class="tt-section" id="yesterday">
+    <h2 class="tt-h2" id="yesterday-heading"><span data-draw="day-label" data-source="info" data-field="label" data-row="0">—</span></h2>
+
+    <div class="tt-tiles" id="yesterday-tiles">
+      <div class="tt-tile" id="y-tile-turns">
+        <span class="tt-tile-label">Turns taken</span>
+        <span class="tt-tile-value" data-draw="y-turns" data-source="summary" data-field="turns" data-where="scope=yesterday">—</span>
+        <span class="tt-tile-sub"><span data-draw="turns-change" data-source="change" data-field="turns_text" data-row="0">—</span> the usual <span data-draw="all-per-day" data-source="summary" data-field="turns_per_day" data-where="scope=all">—</span> a day</span>
+      </div>
+      <div class="tt-tile" id="y-tile-turn-time">
+        <span class="tt-tile-label">Average turn time</span>
+        <span class="tt-tile-value" data-draw="y-mean-turn" data-source="summary" data-field="mean_turn" data-where="scope=yesterday">—</span>
+        <span class="tt-tile-sub"><span data-draw="turn-change" data-source="change" data-field="turn_text" data-row="0">—</span> the all-time <span data-draw="all-mean-turn" data-source="summary" data-field="mean_turn" data-where="scope=all">—</span></span>
+      </div>
+      <div class="tt-tile" id="y-tile-play-time">
+        <span class="tt-tile-label">Average play time</span>
+        <span class="tt-tile-value" data-draw="y-mean-play" data-source="summary" data-field="mean_play" data-where="scope=yesterday">—</span>
+        <span class="tt-tile-sub"><span data-draw="play-change" data-source="change" data-field="play_text" data-row="0">—</span> the all-time <span data-draw="all-mean-play" data-source="summary" data-field="mean_play" data-where="scope=all">—</span></span>
+      </div>
+      <div class="tt-tile" id="y-tile-total-play">
+        <span class="tt-tile-label">Total play time</span>
+        <span class="tt-tile-value" data-draw="y-total-play" data-source="summary" data-field="total_play" data-where="scope=yesterday">—</span>
+        <span class="tt-tile-sub">over <span data-draw="y-play-turns" data-source="summary" data-field="play_turns" data-where="scope=yesterday">—</span> turns played by their owner</span>
+      </div>
+    </div>
+
+    <figure class="tt-fig" id="timeline-figure">
+      <div class="tt-fig-head">
+        <h3 class="tt-fig-title" id="timeline-title">Who had the turn, hour by hour</h3>
+        <div class="tt-legend">
+          <span class="tt-key"><i class="tt-swatch"></i>Waiting to be started</span>
+          <span class="tt-key"><i class="tt-swatch" data-tt-color="0"></i>Being played</span>
+          <span class="tt-key"><i class="tt-swatch" data-tt-color="1"></i>Played by Claude</span>
+        </div>
+      </div>
+      <div class="tt-chart tt-h-timeline" id="timeline" data-draw="timeline" data-source="turns info players"></div>
+    </figure>
+
+    <div class="tt-pair" id="yesterday-rankings">
+      <figure class="tt-fig" id="y-turn-figure">
+        <h3 class="tt-fig-title" id="y-turn-title">Average turn time by player</h3>
+        <div class="tt-chart tt-bars" id="y-turn-bars" data-draw="y-turn-bars" data-source="players"></div>
+      </figure>
+      <figure class="tt-fig" id="y-play-figure">
+        <h3 class="tt-fig-title" id="y-play-title">Average play time by player</h3>
+        <div class="tt-chart tt-bars" id="y-play-bars" data-draw="y-play-bars" data-source="players"></div>
+      </figure>
+    </div>
+
+    <ul class="tt-records" id="y-records" data-draw="y-records" data-source="records"></ul>
+    <p class="tt-quiet" id="y-claude" hidden>Claude played <span data-draw="y-claude-turns" data-source="summary" data-field="claude_turns" data-where="scope=yesterday">—</span> of the day's turns as stand-in (for <span data-draw="y-claude-players" data-source="summary" data-field="claude_players" data-where="scope=yesterday">—</span>), in <span data-draw="y-claude-play" data-source="summary" data-field="claude_mean_play" data-where="scope=yesterday">—</span> on average. Those count towards the player's turn time but not their play time.</p>
+  </section>
+
+  <section class="tt-section" id="trend">
+    <h2 class="tt-h2" id="trend-heading">Day by day</h2>
+
+    <figure class="tt-fig" id="days-bars-figure">
+      <h3 class="tt-fig-title" id="days-bars-title">Turns taken each workday</h3>
+      <div class="tt-chart tt-h-days" id="days-bars" data-draw="days-bars" data-source="days summary"></div>
+    </figure>
+
+    <figure class="tt-fig" id="days-lines-figure">
+      <div class="tt-fig-head">
+        <h3 class="tt-fig-title" id="days-lines-title">Average turn time and play time each workday</h3>
+        <div class="tt-legend">
+          <span class="tt-key"><i class="tt-swatch" data-tt-color="0"></i>Turn time (waiting plus playing)</span>
+          <span class="tt-key"><i class="tt-swatch" data-tt-color="1"></i>Play time</span>
+        </div>
+      </div>
+      <div class="tt-chart tt-h-days" id="days-lines" data-draw="days-lines" data-source="days"></div>
+    </figure>
+
+    <figure class="tt-fig" id="players-figure">
+      <div class="tt-fig-head">
+        <h3 class="tt-fig-title" id="players-title">Each player, day by day</h3>
+        <select class="dash-select" id="metric" aria-label="What each player's chart shows">
+          <option value="mean_turn_s">Average turn time</option>
+          <option value="mean_play_s">Average play time</option>
+          <option value="turns">Turns taken</option>
+        </select>
+      </div>
+      <div class="tt-minis" id="multiples" data-draw="multiples" data-source="player_days days players"></div>
+      <p class="tt-quiet" id="players-note">In turn order. Every chart uses the same scale, and the figure beside each name is the player's all-time one.<span class="tt-ctx-note"> The grey line is everyone's average that day.</span></p>
+    </figure>
+  </section>
+
+  <section class="tt-section" id="all">
+    <h2 class="tt-h2" id="all-heading">All turns since <span data-draw="since" data-source="info" data-field="since" data-row="0">—</span></h2>
+
+    <div class="tt-tiles" id="all-tiles">
+      <div class="tt-tile" id="a-tile-turns">
+        <span class="tt-tile-label">Turns taken</span>
+        <span class="tt-tile-value" data-draw="a-turns" data-source="summary" data-field="turns" data-where="scope=all">—</span>
+        <span class="tt-tile-sub">on <span data-draw="a-days" data-source="summary" data-field="days" data-where="scope=all">—</span> workdays, <span data-draw="all-per-day" data-source="summary" data-field="turns_per_day" data-where="scope=all">—</span> a day</span>
+      </div>
+      <div class="tt-tile" id="a-tile-most">
+        <span class="tt-tile-label">Most turns in one day</span>
+        <span class="tt-tile-value" data-draw="a-most" data-source="summary" data-field="most_turns" data-where="scope=all">—</span>
+        <span class="tt-tile-sub" data-draw="a-most-day" data-source="summary" data-field="most_day" data-where="scope=all">—</span>
+      </div>
+      <div class="tt-tile" id="a-tile-fewest">
+        <span class="tt-tile-label">Fewest turns in one day</span>
+        <span class="tt-tile-value" data-draw="a-fewest" data-source="summary" data-field="fewest_turns" data-where="scope=all">—</span>
+        <span class="tt-tile-sub" data-draw="a-fewest-day" data-source="summary" data-field="fewest_day" data-where="scope=all">—</span>
+      </div>
+      <div class="tt-tile" id="a-tile-turn-time">
+        <span class="tt-tile-label">Average turn time</span>
+        <span class="tt-tile-value" data-draw="all-mean-turn" data-source="summary" data-field="mean_turn" data-where="scope=all">—</span>
+        <span class="tt-tile-sub">half of all turns take under <span data-draw="a-median-turn" data-source="summary" data-field="median_turn" data-where="scope=all">—</span></span>
+      </div>
+      <div class="tt-tile" id="a-tile-play-time">
+        <span class="tt-tile-label">Average play time</span>
+        <span class="tt-tile-value" data-draw="all-mean-play" data-source="summary" data-field="mean_play" data-where="scope=all">—</span>
+        <span class="tt-tile-sub"><span data-draw="a-total-play" data-source="summary" data-field="total_play" data-where="scope=all">—</span> played in all</span>
+      </div>
+      <div class="tt-tile" id="a-tile-pace">
+        <span class="tt-tile-label">Game turns per workday</span>
+        <span class="tt-tile-value" data-draw="a-pace" data-source="summary" data-field="game_turns_per_day" data-where="scope=all">—</span>
+        <span class="tt-tile-sub">a game turn is one round of all ten players</span>
+      </div>
+    </div>
+
+    <div class="tt-pair" id="all-rankings">
+      <figure class="tt-fig" id="a-turn-figure">
+        <h3 class="tt-fig-title" id="a-turn-title">Average turn time by player</h3>
+        <div class="tt-chart tt-bars tt-h-bars" id="a-turn-bars" data-draw="a-turn-bars" data-source="players"></div>
+      </figure>
+      <figure class="tt-fig" id="a-play-figure">
+        <h3 class="tt-fig-title" id="a-play-title">Average play time by player</h3>
+        <div class="tt-chart tt-bars tt-h-bars" id="a-play-bars" data-draw="a-play-bars" data-source="players"></div>
+      </figure>
+    </div>
+
+    <ul class="tt-records" id="a-records" data-draw="a-records" data-source="records"></ul>
+    <p class="tt-quiet" id="a-claude" hidden>Claude has played <span data-draw="a-claude-turns" data-source="summary" data-field="claude_turns" data-where="scope=all">—</span> turns as stand-in (for <span data-draw="a-claude-players" data-source="summary" data-field="claude_players" data-where="scope=all">—</span>), in <span data-draw="a-claude-play" data-source="summary" data-field="claude_mean_play" data-where="scope=all">—</span> on average.</p>
+  </section>
+
+  <details class="tt-details" id="table-details">
+    <summary>Every player's numbers as a table</summary>
+    <div class="tt-scroll">
+      <table class="tt-table" id="players-table" data-source="players" data-row-key="scope,player">
+        <thead>
+          <tr>
+            <th data-field="player">Player</th>
+            <th data-field="turns">Turns</th>
+            <th data-field="mean_turn">Average turn</th>
+            <th data-field="median_turn">Median turn</th>
+            <th data-field="max_turn">Longest turn</th>
+            <th data-field="mean_play">Average play</th>
+            <th data-field="play_turns">Turns with a play time</th>
+            <th data-field="claude_turns">Played by Claude</th>
+            <th data-field="off_hours">Outside working hours</th>
+          </tr>
+        </thead>
+        <tbody data-draw="players-table"></tbody>
+      </table>
+    </div>
+  </details>
+
+  <details class="tt-details" id="notes-details">
+    <summary>How the times are counted</summary>
+    <div class="tt-notes">
+      <p><b>Turn time</b> is waiting plus playing: the working hours that pass from the moment a turn reaches a player until they end it, plus any time they spend playing it outside working hours. A turn left overnight costs nothing for the night. Working hours are <span data-draw="workday" data-source="info" data-field="workday" data-row="0">—</span>.</p>
+      <p><b>Play time</b> runs from pressing Start Turn to the end of the turn, at any hour. It has been recorded since 4 Nov 2026, and turns Claude played are left out of it.</p>
+      <p>A turn counts for the workday it ended in, and a workday runs until 9:00 the next one, so a turn finished in the evening or over the weekend belongs to the workday before.</p>
+      <p><span data-draw="a-off-hours" data-source="summary" data-field="off_hours" data-where="scope=all">—</span> turns were begun and finished entirely outside working hours. They count as turns but are left out of the average, the median and the fastest turn.</p>
+      <p>Fewest and most turns in a day only look at days when at least one turn was taken.</p>
+    </div>
+  </details>
+</div>
+
+<script>
+  // The data file is one JSON object holding seven tables. The loader keeps it whole; each table is then read
+  // through a calc so its rows can be checked in Sources.
+  dash.loader('report', { description: 'Keeps the file as it is: one object with a list of rows per table.', fn: ({ answer }) => ({ data: answer }) });
+  dash.calc('info', { title: 'About this report', description: 'The day reported on, its working hours, the headline and the turn in progress.', inputs: ['report'], fn: (report) => ((report && report.data) || report || {}).info || [] });
+  dash.calc('summary', { title: 'Totals', description: 'Turns, turn time and play time for yesterday and for the whole game.', inputs: ['report'], fn: (report) => ((report && report.data) || report || {}).summary || [] });
+  dash.calc('records', { title: 'Records', description: 'The slowest and fastest turn and the longest and shortest play time.', inputs: ['report'], fn: (report) => ((report && report.data) || report || {}).records || [] });
+  dash.calc('days', { title: 'Each workday', description: 'Turns taken and average times on every workday.', inputs: ['report'], fn: (report) => ((report && report.data) || report || {}).days || [] });
+  dash.calc('players', { title: 'Each player', description: 'Every player\'s turns and average times, for yesterday and for the whole game.', inputs: ['report'], fn: (report) => ((report && report.data) || report || {}).players || [] });
+  dash.calc('player_days', { title: 'Each player, each workday', description: 'A player\'s turns and average times on every workday they had a turn.', inputs: ['report'], fn: (report) => ((report && report.data) || report || {}).player_days || [] });
+  dash.calc('turns', { title: 'Yesterday\'s turns', description: 'Every turn that counted for the day reported on, with its start, Start Turn and end.', inputs: ['report'], fn: (report) => ((report && report.data) || report || {}).turns || [] });
+  dash.calc('change', {
+    title: 'Yesterday against the whole game',
+    description: 'How far yesterday\'s turn count, average turn time and average play time sit from the all-time figures, in percent.',
+    inputs: ['summary'],
+    fn: (summary) => {
+      const yesterday = (summary || []).find((r) => r.scope === 'yesterday');
+      const all = (summary || []).find((r) => r.scope === 'all');
+      if (!yesterday || !all) return [];
+      const pct = (now, base) => (now == null || !base ? null : Math.round((now / base - 1) * 100));
+      const say = (p, up, down) => (p == null ? '' : p === 0 ? 'Level with' : (p > 0 ? '▲ ' : '▼ ') + Math.abs(p) + '% ' + (p > 0 ? up : down));
+      const turns = pct(yesterday.turns, all.turns_per_day);
+      const turn = pct(yesterday.mean_turn_s, all.mean_turn_s);
+      const play = pct(yesterday.mean_play_s, all.mean_play_s);
+      return [{
+        turns_pct: turns, turns_text: say(turns, 'above', 'below'),
+        turn_pct: turn, turn_text: say(turn, 'slower than', 'faster than'),
+        play_pct: play, play_text: say(play, 'longer than', 'shorter than'),
+      }];
+    },
+  });
+
+  const C = dash.colors;
+  const rows = (id) => { const d = dash.data(id); return d.status === 'ok' && Array.isArray(d.data) ? d.data : null; };
+  const failed = (ids) => ids.some((id) => dash.data(id).status === 'error');
+  const one = (id, test) => { const r = rows(id); return (r && r.find(test)) || null; };
+  const info = () => one('info', () => true);
+  const sum = (scope) => one('summary', (r) => r.scope === scope);
+  const change = () => one('change', () => true);
+
+  const parseDay = d3.timeParse('%Y-%m-%d');
+  const fmtDay = (iso) => (iso ? d3.timeFormat('%a %d %b')(parseDay(iso)) : null);
+  const fmtTick = d3.timeFormat('%-d %b');
+  const fmtClock = d3.timeFormat('%-H:%M');
+  const fmtMoment = (iso) => (iso ? d3.timeFormat('%a %d %b %-H:%M')(new Date(iso)) : null);
+  const pad = (n) => String(n).padStart(2, '0');
+  const hms = (s) => {
+    if (s == null) return '—';
+    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+    return h ? h + 'h ' + pad(m) + 'm ' + pad(sec) + 's' : m + 'm ' + pad(sec) + 's';
+  };
+  const plural = (n, word) => n + ' ' + word + (n === 1 ? '' : 's');
+  const make = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+
+  // Words and numbers that are one cell of a table.
+  const texts = {
+    'headline': () => info() && info().headline,
+    'now-turn': () => info() && info().now_turn,
+    'now-player': () => info() && info().now_player,
+    'now-since': () => info() && fmtMoment(info().now_since),
+    'day-label': () => info() && info().label,
+    'since': () => info() && fmtDay(info().since),
+    'workday': () => info() && info().workday,
+    'y-turns': () => sum('yesterday') && sum('yesterday').turns,
+    'y-mean-turn': () => sum('yesterday') && sum('yesterday').mean_turn,
+    'y-mean-play': () => sum('yesterday') && sum('yesterday').mean_play,
+    'y-total-play': () => sum('yesterday') && sum('yesterday').total_play,
+    'y-play-turns': () => sum('yesterday') && sum('yesterday').play_turns,
+    'y-claude-turns': () => sum('yesterday') && sum('yesterday').claude_turns,
+    'y-claude-players': () => sum('yesterday') && sum('yesterday').claude_players,
+    'y-claude-play': () => sum('yesterday') && sum('yesterday').claude_mean_play,
+    'all-per-day': () => sum('all') && sum('all').turns_per_day,
+    'all-mean-turn': () => sum('all') && sum('all').mean_turn,
+    'all-mean-play': () => sum('all') && sum('all').mean_play,
+    'a-turns': () => sum('all') && sum('all').turns,
+    'a-days': () => sum('all') && sum('all').days,
+    'a-most': () => sum('all') && sum('all').most_turns,
+    'a-most-day': () => sum('all') && fmtDay(sum('all').most_day),
+    'a-fewest': () => sum('all') && sum('all').fewest_turns,
+    'a-fewest-day': () => sum('all') && fmtDay(sum('all').fewest_day),
+    'a-median-turn': () => sum('all') && sum('all').median_turn,
+    'a-total-play': () => sum('all') && sum('all').total_play,
+    'a-pace': () => sum('all') && sum('all').game_turns_per_day,
+    'a-claude-turns': () => sum('all') && sum('all').claude_turns,
+    'a-claude-players': () => sum('all') && sum('all').claude_players,
+    'a-claude-play': () => sum('all') && sum('all').claude_mean_play,
+    'a-off-hours': () => sum('all') && sum('all').off_hours,
+  };
+  Object.keys(texts).forEach((name) => {
+    dash.draw(name, (el) => {
+      const v = texts[name]();
+      el.textContent = v == null || v === '' ? '—' : String(v);
+    });
+  });
+
+  // Yesterday against the all-time figure. More turns and faster turns are good; play time is neither.
+  const changes = { 'turns-change': ['turns', 1], 'turn-change': ['turn', -1], 'play-change': ['play', 0] };
+  Object.keys(changes).forEach((name) => {
+    dash.draw(name, (el) => {
+      const c = change(), key = changes[name][0], good = changes[name][1];
+      const p = c ? c[key + '_pct'] : null;
+      el.textContent = c && c[key + '_text'] ? c[key + '_text'] : '—';
+      el.classList.toggle('tt-good', p != null && p * good > 0);
+      el.classList.toggle('tt-bad', p != null && p * good < 0);
+    });
+  });
+
+  // Tooltips live inside their chart's drawing.
+  function tip(box) {
+    const t = make('div', 'tt-tip');
+    t.hidden = true;
+    box.append(t);
+    return {
+      show(event, lines) {
+        t.replaceChildren(...lines.filter(Boolean).map((line, i) => make('div', i ? '' : 'tt-tip-h', line)));
+        t.hidden = false;
+        const b = box.getBoundingClientRect();
+        let x = event.clientX - b.left + 14, y = event.clientY - b.top + 14;
+        if (x + t.offsetWidth > b.width) x = Math.max(0, event.clientX - b.left - t.offsetWidth - 14);
+        if (y + t.offsetHeight > b.height) y = Math.max(0, event.clientY - b.top - t.offsetHeight - 14);
+        t.style.left = x + 'px';
+        t.style.top = y + 'px';
+      },
+      hide() { t.hidden = true; },
+    };
+  }
+  function empty(el, ids, words) {
+    el.replaceChildren();
+    if (failed(ids)) el.append(make('p', 'tt-quiet', 'Failed to load'));
+    else if (words) el.append(make('p', 'tt-quiet', words));
+  }
+  function svgIn(el, width, height, label) {
+    return d3.select(el).append('svg').attr('width', '100%').attr('viewBox', '0 0 ' + width + ' ' + height)
+      .attr('role', 'img').attr('aria-label', label);
+  }
+  function widest(svg, labels, cls) {
+    const probe = svg.append('g').attr('visibility', 'hidden');
+    let w = 0;
+    labels.forEach((s) => { w = Math.max(w, probe.append('text').attr('class', cls || null).text(s).node().getComputedTextLength()); });
+    probe.remove();
+    return w;
+  }
+
+  // Ranked bars: one row per player, slowest first, the ones without a figure last.
+  function bars(name, scope, key, countKey, noun, label) {
+    dash.draw(name, (el) => {
+      const all = rows('players');
+      if (!all) return empty(el, ['players']);
+      el.replaceChildren();
+      const list = all.filter((r) => r.scope === scope)
+        .sort((a, b) => (b[key] == null ? -1 : b[key]) - (a[key] == null ? -1 : a[key]) || a.seat - b.seat);
+      const max = d3.max(list, (r) => r[key]) || 1;
+      const hover = tip(el);
+      list.forEach((r) => {
+        const row = make('div', 'tt-bar-row');
+        const track = make('div', 'tt-bar-track');
+        if (r[key] != null) {
+          const fill = make('div', 'tt-bar-fill');
+          fill.style.width = (r[key] / max) * 100 + '%';
+          fill.style.background = C[0];
+          track.append(fill);
+        }
+        const none = r.turns === 0 ? 'no turn' : key === 'mean_turn_s' ? 'outside hours' : 'not recorded';
+        row.append(
+          make('span', '', r.player), track,
+          make('span', 'tt-bar-val' + (r[key] == null ? ' tt-none' : ''), r[key] == null ? none : hms(r[key])),
+          make('span', 'tt-bar-n', r[countKey] ? plural(r[countKey], noun) : ''));
+        const lines = [r.player, r[key] == null ? none : label.split(' by ')[0] + ' ' + hms(r[key]) + ' over ' + plural(r[countKey], noun)];
+        if (key === 'mean_turn_s' && r.turns) lines.push('Longest turn ' + hms(r.max_turn_s), r.turns > 1 ? 'Median ' + hms(r.median_turn_s) : null);
+        if (r.claude_turns) lines.push(plural(r.claude_turns, 'turn') + ' played by Claude');
+        Array.from(row.children).forEach((cell) => {
+          cell.addEventListener('pointermove', (event) => hover.show(event, lines));
+          cell.addEventListener('pointerleave', hover.hide);
+        });
+        el.append(row);
+      });
+    });
+  }
+  bars('y-turn-bars', 'yesterday', 'mean_turn_s', 'turns', 'turn', 'Average turn time by player, yesterday');
+  bars('y-play-bars', 'yesterday', 'mean_play_s', 'play_turns', 'turn', 'Average play time by player, yesterday');
+  bars('a-turn-bars', 'all', 'mean_turn_s', 'turns', 'turn', 'Average turn time by player, all turns');
+  bars('a-play-bars', 'all', 'mean_play_s', 'play_turns', 'turn', 'Average play time by player, all turns');
+
+  // Records: the extremes of a scope.
+  function records(name, scope) {
+    dash.draw(name, (ul) => {
+      const all = rows('records');
+      ul.replaceChildren();
+      (all || []).filter((r) => r.scope === scope).forEach((r) => {
+        const li = make('li', 'tt-record');
+        li.append(
+          make('span', 'tt-record-what', r.record),
+          make('span', 'tt-record-time', r.time),
+          make('span', 'tt-record-who', r.player + ', turn ' + r.turn + (scope === 'all' ? ', ' + fmtDay(r.day) : '')));
+        ul.append(li);
+      });
+    });
+  }
+  records('y-records', 'yesterday');
+  records('a-records', 'all');
+
+  // Yesterday hour by hour: a row per player, grey while the turn waited, colored while it was played.
+  dash.draw('timeline', (el) => {
+    const turns = rows('turns'), inf = info(), players = rows('players');
+    if (!turns || !inf || !players) return empty(el, ['turns', 'info', 'players']);
+    if (!turns.length) return empty(el, [], 'No turn was finished that day.');
+    const W = el.clientWidth;
+    if (!W) return;
+    el.replaceChildren();
+    const who = players.filter((p) => p.scope === 'yesterday').sort((a, b) => a.seat - b.seat);
+    const rowOf = new Map(who.map((p, i) => [p.player, i]));
+    const at = (iso) => (iso ? new Date(iso) : null);
+    const x0 = at(inf.day_start);
+    let x1 = at(inf.day_end);
+    turns.forEach((r) => { const e = at(r.end); if (e.toDateString() === x0.toDateString() && e > x1) x1 = e; });
+    const clamp = (d) => (d < x0 ? x0 : d > x1 ? x1 : d);
+    const rowH = 22, m = { t: 6, r: 10, b: 22, l: 0 };
+    const H = m.t + who.length * rowH + m.b;
+    const svg = svgIn(el, W, H, 'Each player\'s turns across ' + inf.label + ': when each waited and when it was played');
+    m.l = Math.ceil(widest(svg, who.map((p) => p.player), 'tt-ink')) + 10;
+    const x = d3.scaleTime().domain([x0, x1]).range([m.l, W - m.r]);
+    let hours = d3.timeHour.range(d3.timeHour.ceil(x0), new Date(+x1 + 1));
+    if ((W - m.l - m.r) / Math.max(1, hours.length - 1) < 46) hours = hours.filter((d, i) => i % 2 === 0);
+    const g1 = at(inf.grace_start), g2 = at(inf.grace_end);
+    if (g1 && g2 && g1 >= x0 && g2 <= x1) {
+      svg.append('rect').attr('x', x(g1)).attr('y', m.t).attr('width', x(g2) - x(g1)).attr('height', who.length * rowH)
+        .style('fill', 'var(--cds-chart-grid)').attr('opacity', 0.6);
+    }
+    svg.append('g').selectAll('line').data(hours).join('line')
+      .attr('x1', (d) => x(d)).attr('x2', (d) => x(d)).attr('y1', m.t).attr('y2', m.t + who.length * rowH)
+      .style('stroke', 'var(--cds-chart-grid)');
+    svg.append('g').selectAll('text').data(hours).join('text')
+      .attr('x', (d) => x(d)).attr('y', H - 6).attr('text-anchor', 'middle').text((d) => fmtClock(d));
+    svg.append('g').selectAll('text').data(who).join('text').attr('class', 'tt-ink')
+      .attr('x', m.l - 10).attr('y', (d, i) => m.t + i * rowH + rowH / 2).attr('dy', '0.35em').attr('text-anchor', 'end')
+      .text((d) => d.player);
+    const hover = tip(el);
+    let outside = 0;
+    turns.forEach((r) => {
+      const i = rowOf.get(r.player);
+      if (i == null) return;
+      const s = at(r.start), k = at(r.taken), e = at(r.end);
+      const y = m.t + i * rowH;
+      const a = x(clamp(s)), w = x(clamp(k || e)), b = x(clamp(e));
+      if (b <= a && !(s >= x0 && e <= x1)) { outside += 1; return; }
+      if (w > a) svg.append('rect').attr('x', a).attr('y', y + 5).attr('width', Math.max(1, w - a - (k ? 1 : 0))).attr('height', 12).attr('rx', 2).style('fill', 'var(--cds-chart-muted)');
+      if (k) svg.append('rect').attr('x', Math.min(w, x.range()[1] - 2)).attr('y', y + 5).attr('width', Math.max(2, b - w)).attr('height', 12).attr('rx', 2).style('fill', r.claude ? C[1] : C[0]);
+      const lines = [
+        r.player + ', turn ' + r.turn,
+        'Turn time ' + hms(r.turn_s),
+        'Arrived ' + (s < x0 ? fmtMoment(r.start) : fmtClock(s)),
+        k ? (r.claude ? 'Claude played it ' : 'Played ') + fmtClock(k) + ' to ' + (e > x1 ? fmtMoment(r.end) : fmtClock(e)) + ' (' + hms(r.play_s) + ')' : 'Ended ' + fmtClock(e) + ', Start Turn not recorded',
+      ];
+      svg.append('rect').attr('x', a - 3).attr('y', y).attr('width', Math.max(8, b - a + 6)).attr('height', rowH).attr('fill', 'transparent')
+        .on('pointermove', (event) => hover.show(event, lines)).on('pointerleave', hover.hide);
+    });
+    if (outside) el.append(make('p', 'tt-quiet', plural(outside, 'more turn') + (outside === 1 ? ' was' : ' were') + ' played entirely outside these hours.'));
+  });
+
+  // The two day-by-day charts share margins and the same band per workday, so they line up.
+  const DM = { t: 18, r: 44, b: 24, l: 38 }, DH = 180;
+  function dayScale(days, W) {
+    return d3.scaleBand().domain(days.map((d) => d.day)).range([DM.l, W - DM.r]).paddingInner(0.25).paddingOuter(0.15);
+  }
+  function dayAxis(svg, days, x, y, ticks, fmtY) {
+    svg.append('g').selectAll('line').data(ticks).join('line')
+      .attr('x1', DM.l).attr('x2', x.range()[1]).attr('y1', (d) => y(d)).attr('y2', (d) => y(d))
+      .style('stroke', (d) => (d === 0 ? 'var(--cds-chart-axis)' : 'var(--cds-chart-grid)'));
+    svg.append('g').selectAll('text').data(ticks).join('text')
+      .attr('x', DM.l - 8).attr('y', (d) => y(d)).attr('dy', '0.35em').attr('text-anchor', 'end').text(fmtY);
+    // A label for the first day and every Monday, as long as they have room.
+    let last = -Infinity;
+    const marks = days.filter((d, i) => {
+      const cx = x(d.day);
+      if (!(i === 0 || parseDay(d.day).getDay() === 1) || cx - last < 52) return false;
+      last = cx;
+      return true;
+    });
+    svg.append('g').selectAll('text').data(marks).join('text')
+      .attr('x', (d) => x(d.day) + x.bandwidth() / 2).attr('y', DH - 6).attr('text-anchor', 'middle').text((d) => fmtTick(parseDay(d.day)));
+  }
+  function nearestDay(days, x, event, node) {
+    const px = d3.pointer(event, node)[0];
+    const i = Math.round((px - x(days[0].day) - x.bandwidth() / 2) / x.step());
+    return days[Math.max(0, Math.min(days.length - 1, i))];
+  }
+
+  dash.draw('days-bars', (el) => {
+    const days = rows('days'), all = sum('all');
+    if (!days || !days.length) return empty(el, ['days']);
+    const W = el.clientWidth;
+    if (!W) return;
+    el.replaceChildren();
+    const svg = svgIn(el, W, DH, 'Turns taken on each workday');
+    const x = dayScale(days, W);
+    const y = d3.scaleLinear().domain([0, d3.max(days, (d) => d.turns) || 1]).nice(4).range([DH - DM.b, DM.t]);
+    dayAxis(svg, days, x, y, y.ticks(4), (d) => d);
+    const bw = x.bandwidth(), r = Math.min(4, bw / 2);
+    svg.append('g').selectAll('path').data(days.filter((d) => d.turns > 0)).join('path')
+      .attr('d', (d) => {
+        const x0 = x(d.day), y0 = y(d.turns), h = y(0) - y0, rr = Math.min(r, h);
+        return 'M' + x0 + ',' + (y0 + h) + 'v' + -(h - rr) + 'a' + rr + ',' + rr + ' 0 0 1 ' + rr + ',' + -rr + 'h' + (bw - 2 * rr) + 'a' + rr + ',' + rr + ' 0 0 1 ' + rr + ',' + rr + 'v' + (h - rr) + 'z';
+      })
+      .style('fill', C[0]);
+    if (all && all.turns_per_day != null) {
+      svg.append('line').attr('x1', DM.l).attr('x2', x.range()[1]).attr('y1', y(all.turns_per_day)).attr('y2', y(all.turns_per_day))
+        .style('stroke', 'var(--cds-chart-reference)').attr('stroke-dasharray', '4 3');
+      svg.append('text').attr('x', x.range()[1] + 6).attr('y', y(all.turns_per_day)).attr('dy', '0.35em').text('usual');
+    }
+    const hi = d3.max(days, (d) => d.turns), lo = d3.min(days.filter((d) => d.turns > 0), (d) => d.turns);
+    const labelled = bw >= 18 ? days : days.filter((d, i) => d.turns === hi || d.turns === lo || i === days.length - 1);
+    svg.append('g').selectAll('text').data(labelled).join('text').attr('class', 'tt-ink tt-halo')
+      .attr('x', (d) => x(d.day) + bw / 2).attr('y', (d) => y(d.turns) - 5).attr('text-anchor', 'middle').text((d) => d.turns);
+    const hover = tip(el);
+    svg.append('rect').attr('x', DM.l).attr('y', 0).attr('width', x.range()[1] - DM.l).attr('height', DH - DM.b).attr('fill', 'transparent')
+      .on('pointermove', function (event) {
+        const d = nearestDay(days, x, event, this);
+        hover.show(event, [fmtDay(d.day), plural(d.turns, 'turn'), d.claude_turns ? plural(d.claude_turns, 'turn') + ' played by Claude' : null]);
+      })
+      .on('pointerleave', hover.hide);
+  });
+
+  dash.draw('days-lines', (el) => {
+    const days = rows('days');
+    if (!days || !days.length) return empty(el, ['days']);
+    const W = el.clientWidth;
+    if (!W) return;
+    el.replaceChildren();
+    const svg = svgIn(el, W, DH, 'Average turn time and average play time on each workday, in minutes');
+    const x = dayScale(days, W), cx = (d) => x(d.day) + x.bandwidth() / 2;
+    const series = [{ key: 'mean_turn_s', name: 'Turn', color: C[0] }, { key: 'mean_play_s', name: 'Play', color: C[1] }];
+    const y = d3.scaleLinear().domain([0, (d3.max(days, (d) => Math.max(d.mean_turn_s || 0, d.mean_play_s || 0)) || 60) / 60]).nice(4).range([DH - DM.b, DM.t]);
+    dayAxis(svg, days, x, y, y.ticks(4), (d) => d + 'm');
+    const cross = svg.append('line').attr('y1', DM.t).attr('y2', DH - DM.b).style('stroke', 'var(--cds-chart-axis)').attr('visibility', 'hidden');
+    const ends = [];
+    series.forEach((s) => {
+      const have = days.filter((d) => d[s.key] != null);
+      if (!have.length) return;
+      svg.append('path').attr('fill', 'none').attr('stroke-width', 2).attr('stroke-linejoin', 'round').style('stroke', s.color)
+        .attr('d', d3.line().defined((d) => d[s.key] != null).x(cx).y((d) => y(d[s.key] / 60))(days));
+      svg.append('g').selectAll('circle').data(have).join('circle')
+        .attr('cx', cx).attr('cy', (d) => y(d[s.key] / 60)).attr('r', (d, i) => (i === have.length - 1 ? 4 : 2.5))
+        .style('fill', s.color).style('stroke', 'var(--color-bg)').attr('stroke-width', (d, i) => (i === have.length - 1 ? 2 : 1));
+      const lastRow = have[have.length - 1];
+      ends.push({ name: s.name, x: cx(lastRow) + 9, y: y(lastRow[s.key] / 60) });
+    });
+    if (ends.length === 2 && Math.abs(ends[0].y - ends[1].y) < 13) {
+      const up = ends[0].y <= ends[1].y ? ends[0] : ends[1], down = up === ends[0] ? ends[1] : ends[0];
+      const mid = (up.y + down.y) / 2;
+      up.y = mid - 6.5; down.y = mid + 6.5;
+    }
+    svg.append('g').selectAll('text').data(ends).join('text').attr('class', 'tt-ink')
+      .attr('x', (d) => d.x).attr('y', (d) => d.y).attr('dy', '0.35em').text((d) => d.name);
+    const hover = tip(el);
+    svg.append('rect').attr('x', DM.l).attr('y', 0).attr('width', x.range()[1] - DM.l).attr('height', DH - DM.b).attr('fill', 'transparent')
+      .on('pointermove', function (event) {
+        const d = nearestDay(days, x, event, this);
+        cross.attr('x1', cx(d)).attr('x2', cx(d)).attr('visibility', 'visible');
+        hover.show(event, [fmtDay(d.day), 'Turn time ' + hms(d.mean_turn_s), 'Play time ' + (d.mean_play_s == null ? 'not recorded yet' : hms(d.mean_play_s)), plural(d.turns, 'turn')]);
+      })
+      .on('pointerleave', () => { cross.attr('visibility', 'hidden'); hover.hide(); });
+  });
+
+  // One small chart per player, all on the same scale.
+  let metric = 'mean_turn_s';
+  document.querySelectorAll('#metric').forEach((sel) => {
+    metric = sel.value || metric;
+    sel.addEventListener('change', () => {
+      metric = sel.value;
+      document.querySelectorAll('.tt-ctx-note').forEach((n) => { n.hidden = metric === 'turns'; });
+      dash.draw('multiples');
+    });
+  });
+  document.querySelectorAll('.tt-ctx-note').forEach((n) => { n.hidden = metric === 'turns'; });
+
+  dash.draw('multiples', (el) => {
+    const pd = rows('player_days'), days = rows('days'), players = rows('players');
+    if (!pd || !days || !players || !days.length) return empty(el, ['player_days', 'days', 'players']);
+    el.replaceChildren();
+    const counting = metric === 'turns';
+    const list = players.filter((p) => p.scope === 'all').sort((a, b) => a.seat - b.seat);
+    const dayKeys = days.map((d) => d.day), dayOf = new Map(days.map((d) => [d.day, d]));
+    const max = d3.max(pd, (r) => r[metric]) || 1;
+    const what = counting ? 'Turns taken' : metric === 'mean_turn_s' ? 'Average turn time' : 'Average play time';
+    const show = (v) => (v == null ? 'none' : counting ? plural(v, 'turn') : hms(v));
+    const cards = list.map((p) => {
+      const card = make('div', 'tt-mini');
+      const head = make('div', 'tt-mini-head');
+      head.append(make('span', 'tt-mini-name', p.player), make('span', 'tt-mini-val', show(p[metric])));
+      card.append(head);
+      el.append(card);
+      return card;
+    });
+    const hover = tip(el);
+    const W = cards[0].clientWidth, H = 64;
+    if (!W) return;
+    list.forEach((p, n) => {
+      const mine = new Map(pd.filter((r) => r.player === p.player).map((r) => [r.day, r]));
+      const svg = svgIn(cards[n], W, H, what + ' for ' + p.player + ' on each workday');
+      const x = d3.scaleBand().domain(dayKeys).range([2, W - 2]).paddingInner(0.2);
+      const cx = (day) => x(day) + x.bandwidth() / 2;
+      const y = d3.scaleLinear().domain([0, max]).range([H - 3, 5]);
+      svg.append('line').attr('x1', 0).attr('x2', W).attr('y1', y(0)).attr('y2', y(0)).style('stroke', 'var(--cds-chart-axis)');
+      const dot = svg.append('circle').attr('r', 4).style('fill', C[0]).style('stroke', 'var(--color-bg)').attr('stroke-width', 2).attr('visibility', 'hidden');
+      if (counting) {
+        svg.append('g').selectAll('rect').data(dayKeys.filter((k) => mine.has(k))).join('rect')
+          .attr('x', (k) => x(k)).attr('width', x.bandwidth()).attr('y', (k) => y(mine.get(k).turns)).attr('height', (k) => y(0) - y(mine.get(k).turns))
+          .attr('rx', Math.min(2, x.bandwidth() / 2)).style('fill', C[0]);
+      } else {
+        svg.append('path').attr('fill', 'none').attr('stroke-width', 1.5).style('stroke', 'var(--cds-chart-muted)')
+          .attr('d', d3.line().defined((k) => dayOf.get(k)[metric] != null).x(cx).y((k) => y(Math.min(max, dayOf.get(k)[metric])))(dayKeys));
+        const has = (k) => mine.has(k) && mine.get(k)[metric] != null;
+        svg.append('path').attr('fill', 'none').attr('stroke-width', 2).attr('stroke-linejoin', 'round').style('stroke', C[0])
+          .attr('d', d3.line().defined(has).x(cx).y((k) => y(mine.get(k)[metric]))(dayKeys));
+        svg.append('g').selectAll('circle').data(dayKeys.filter(has)).join('circle')
+          .attr('cx', cx).attr('cy', (k) => y(mine.get(k)[metric])).attr('r', 2).style('fill', C[0]);
+      }
+      svg.append('rect').attr('width', W).attr('height', H).attr('fill', 'transparent')
+        .on('pointermove', function (event) {
+          const px = d3.pointer(event, this)[0];
+          const k = dayKeys[Math.max(0, Math.min(dayKeys.length - 1, Math.round((px - cx(dayKeys[0])) / x.step())))];
+          const r = mine.get(k), v = r ? r[metric] : null;
+          if (v != null && !counting) dot.attr('cx', cx(k)).attr('cy', y(v)).attr('visibility', 'visible');
+          else dot.attr('visibility', 'hidden');
+          hover.show(event, [
+            p.player + ', ' + fmtDay(k),
+            r ? (counting ? plural(r.turns, 'turn') : what + ' ' + (v == null ? 'not recorded' : hms(v)) + ' over ' + plural(r.turns, 'turn')) : 'No turn',
+            counting ? null : 'Everyone: ' + (dayOf.get(k)[metric] == null ? 'not recorded' : hms(dayOf.get(k)[metric])),
+          ]);
+        })
+        .on('pointerleave', () => { dot.attr('visibility', 'hidden'); hover.hide(); });
+    });
+  });
+
+  // The table view of the all-time figures.
+  dash.draw('players-table', (body) => {
+    const all = rows('players');
+    body.replaceChildren();
+    (all || []).filter((r) => r.scope === 'all')
+      .sort((a, b) => (b.mean_turn_s || 0) - (a.mean_turn_s || 0) || a.seat - b.seat)
+      .forEach((r) => {
+        const tr = make('tr');
+        tr.dataset.key = encodeURIComponent(r.scope) + ',' + encodeURIComponent(r.player);
+        [r.player, r.turns, r.mean_turn, r.median_turn, r.max_turn, r.mean_play, r.play_turns, r.claude_turns, r.off_hours]
+          .forEach((v) => tr.append(make('td', '', v == null ? '—' : String(v))));
+        body.append(tr);
+      });
+  });
+
+  // Swatches take the series colors; the stand-in sentences show only when Claude played a turn.
+  document.querySelectorAll('[data-tt-color]').forEach((e) => { e.style.background = C[Number(e.dataset.ttColor)]; });
+  dash.onData(() => {
+    const y = sum('yesterday'), a = sum('all');
+    document.querySelectorAll('#y-claude').forEach((p) => { p.hidden = !(y && y.claude_turns > 0); });
+    document.querySelectorAll('#a-claude').forEach((p) => { p.hidden = !(a && a.claude_turns > 0); });
+  });
+</script>

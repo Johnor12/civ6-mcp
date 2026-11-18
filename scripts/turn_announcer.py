@@ -41,6 +41,12 @@ the one before: a turn finished overnight adds to its count.
   from the bot.
 - After turn_logger.TURN_LIMIT_S: a last message from the bot, saying any
   other player can now have the turn played through the Slack bot.
+- When the player presses Start Turn: "Randy started turn 46.", with no
+  mention, so the channel knows the turn is under way. The first press of
+  the turn only, never when Claude took the seat, and not for a press found
+  more than STARTED_FRESH_S after it happened (the announcer was down): by
+  then it is old news. These posts list no turns, so the start-of-turn
+  message's "since my last post" passes over them.
 
 No reminder goes out once the turn has been taken: the taken log
 (scripts/data/taken_log.jsonl, beside the turn log, also kept by the turn
@@ -110,6 +116,9 @@ PENDING = (
     "{mention} it's still your turn: the game is back on your Start Turn screen, so something still needs "
     "your input before the turn can end. Press Start Turn again and finish it."
 )
+STARTED = "{name} started turn {turn}."  # no mention: the player is the one person who knows already
+STARTED_RE = re.compile(r".+ started turn \d+\.")  # STARTED's posts, which the turn list's "my last post" skips
+STARTED_FRESH_S = 300  # a Start Turn press first seen later than this after it happened is not announced
 LOOKBACK_S = 24 * 3600  # how far back the turn message looks for the bot's last post
 HAND_PING_S = 60  # a mention this long before the turn began counts as the hand ping
 LOCK_PATH = REPO_ROOT / "scripts" / "data" / "turn_announcer.lock"
@@ -166,8 +175,43 @@ def _announce(client, now: datetime) -> bool:
     if current is None:
         return False
     rec, worked = current
-    pending = _pending_input(client, rec, now)
-    return _stage_message(client, rec, worked, now) or pending
+    # In the order they happen: the turn's message, Start Turn, the screen coming back.
+    posted = _stage_message(client, rec, worked, now)
+    posted = _started(client, rec, now) or posted
+    return _pending_input(client, rec, now) or posted
+
+
+def _started(client, rec: turn_logger.TurnRecord, now: datetime) -> bool:
+    """Say in the channel, without a mention, that the player pressed Start Turn; True when posted.
+
+    The taken log keeps the first press of a turn only, so a turn back on
+    its Start Turn screen is not announced again. The bot's own post of the
+    same text since the press counts as sent, so a restart sends nothing twice.
+    """
+    sent = (rec.key, "started")
+    if sent in _sent:
+        return False
+    took = turn_logger.turn_taken(rec.key, by=turn_logger.turn_watch.PLAYER)
+    if took is None:
+        return False
+    if (now - took.at).total_seconds() > STARTED_FRESH_S:
+        log.info("turn %d: %s pressed Start Turn at %s, too long ago to announce", rec.turn, rec.player, f"{took.at:%H:%M:%S}")
+        _sent.add(sent)
+        return False
+    player = player_named(rec.player)
+    if player is None:
+        log.warning("%s started turn %d but is not in PLAYERS; not announced", rec.player, rec.turn)
+        _sent.add(sent)
+        return False
+    text = STARTED.format(name=player.name, turn=rec.turn)
+    posted = False
+    with posting_lock():
+        if not own_post(client, text, took.at):
+            client.chat_postMessage(channel=CHANNEL, text=text)
+            log.info("announced %s's Start Turn at %s: %s", player.name, f"{took.at:%H:%M:%S}", text)
+            posted = True
+    _sent.add(sent)
+    return posted
 
 
 def _pending_input(client, rec: turn_logger.TurnRecord, now: datetime) -> bool:
@@ -254,21 +298,35 @@ def _stage_message(client, rec: turn_logger.TurnRecord, worked: float, now: date
     return posted
 
 
-def mentioned(client, slack_id: str, since: datetime, from_bot: bool) -> bool:
-    """Whether a channel message since `since` @'s the player; with from_bot, only the bot's own count."""
-    tag = re.compile(rf"<@{slack_id}[>|]")
-    bot_ids = own_ids(client) if from_bot else ()
+def history(client, since: datetime) -> Iterator[dict]:
+    """The channel's messages since `since`, newest first, page by page as they are needed (thread replies aside)."""
     cursor = None
     while True:
         page = client.conversations_history(
             channel=CHANNEL, oldest=f"{since.timestamp():.6f}", inclusive=True, limit=200, cursor=cursor
         )
-        for msg in page["messages"]:
-            if tag.search(msg.get("text", "")) and (not from_bot or msg.get("user") in bot_ids or msg.get("bot_id") in bot_ids):
-                return True
+        yield from page["messages"]
         cursor = (page.get("response_metadata") or {}).get("next_cursor")
         if not cursor:
-            return False
+            return
+
+
+def is_own(client, msg: dict) -> bool:
+    bot_ids = own_ids(client)
+    return msg.get("user") in bot_ids or msg.get("bot_id") in bot_ids
+
+
+def mentioned(client, slack_id: str, since: datetime, from_bot: bool) -> bool:
+    """Whether a channel message since `since` @'s the player; with from_bot, only the bot's own count."""
+    tag = re.compile(rf"<@{slack_id}[>|]")
+    return any(
+        tag.search(msg.get("text", "")) and (not from_bot or is_own(client, msg)) for msg in history(client, since)
+    )
+
+
+def own_post(client, text: str, since: datetime) -> bool:
+    """Whether the bot has posted exactly `text` in the channel since `since`."""
+    return any(msg.get("text") == text and is_own(client, msg) for msg in history(client, since))
 
 
 def _recent(pt: turn_times.PlayerTurn, end: datetime) -> str:
@@ -328,19 +386,16 @@ def recent_turns(client, seq: list[turn_times.PlayerTurn] | None, now: datetime)
 
 
 def last_own_post(client, floor: datetime) -> datetime | None:
-    """When the bot last posted in the channel, or None if not since `floor`."""
-    bot_ids = own_ids(client)
-    cursor = None
-    while True:
-        page = client.conversations_history(
-            channel=CHANNEL, oldest=f"{floor.timestamp():.6f}", inclusive=True, limit=200, cursor=cursor
-        )
-        for msg in page["messages"]:  # newest first
-            if msg.get("user") in bot_ids or msg.get("bot_id") in bot_ids:
-                return datetime.fromtimestamp(float(msg["ts"]))
-        cursor = (page.get("response_metadata") or {}).get("next_cursor")
-        if not cursor:
-            return None
+    """When the bot last posted in the channel, or None if not since `floor`.
+
+    Its Start Turn posts (STARTED) do not count: they list no turns, and
+    counting them would drop every turn that ended before one, so a turn
+    that got a hand ping would never be listed.
+    """
+    for msg in history(client, floor):  # newest first
+        if is_own(client, msg) and not STARTED_RE.fullmatch(msg.get("text", "")):
+            return datetime.fromtimestamp(float(msg["ts"]))
+    return None
 
 
 def own_ids(client) -> tuple[str, str]:

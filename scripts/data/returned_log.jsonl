@@ -34,3 +34,5 @@
 {"at": "2026-11-17T11:28:51-05:00", "turn": 45, "leader": "LEADER_SUK_AL_HASAN", "player": "Jeffson", "event": "resumed", "by": "player"}
 {"at": "2026-11-17T16:35:48-05:00", "turn": 46, "leader": "LEADER_VICTORIA", "player": "Jake DuRegger", "event": "returned", "by": "player"}
 {"at": "2026-11-18T09:31:27-05:00", "turn": 46, "leader": "LEADER_VICTORIA", "player": "Jake DuRegger", "event": "resumed", "by": "claude"}
+{"at": "2026-11-18T12:00:04-05:00", "turn": 47, "leader": "LEADER_SUK_AL_HASAN", "player": "Jeffson", "event": "returned", "by": "player"}
+{"at": "2026-11-18T12:00:14-05:00", "turn": 47, "leader": "LEADER_SUK_AL_HASAN", "player": "Jeffson", "event": "resumed", "by": "player"}

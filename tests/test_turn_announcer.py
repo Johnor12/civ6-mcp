@@ -266,10 +266,11 @@ class TestReminders:
         _turn(_at(0, 10))
         assert _check(slack, _at(0, 10, 1))
         _taken(_at(0, 10, 58))
+        assert _check(slack, _at(0, 10, 58))  # "Randy started turn 3."
         calls = slack.history_calls
         assert not _check(slack, _at(0, 11))
         assert not _check(slack, _at(0, 13))
-        assert len(slack.posts) == 1
+        assert len(slack.posts) == 2
         assert slack.history_calls == calls  # Slack is not even asked
         assert "no 1h message for Randy, who pressed Start Turn at 10:58:00" in caplog.text
 
@@ -307,7 +308,7 @@ class TestReminders:
         _turn(_at(0, 10))
         _taken(_at(0, 10))
         assert _check(slack, _at(0, 10, 1))
-        assert slack.posts[-1].startswith(f"<@{RANDY}> it's your turn")
+        assert slack.posts == [f"<@{RANDY}> it's your turn (today's turns: 0).", "Randy started turn 3."]
 
     def test_hunter_gets_no_fifteen_minute_reminder_but_the_rest(self, slack, caplog):
         caplog.set_level("INFO", logger="turn_announcer")
@@ -344,6 +345,79 @@ class TestReminders:
         assert not _check(slack, _at(7, 9, 4))  # Monday: 14 min so far
         assert _check(slack, _at(7, 9, 5))
         assert "waiting 15m" in slack.posts[-1]
+
+
+class TestStarted:
+    """When the player presses Start Turn the channel hears of it, without a mention."""
+
+    def test_start_turn_is_announced_once_without_a_mention(self, slack):
+        _turn(_at(0, 10))
+        assert _check(slack, _at(0, 10, 1))
+        assert not _check(slack, _at(0, 10, 11))
+        _taken(_at(0, 10, 12))
+        assert _check(slack, _at(0, 10, 12))
+        assert slack.posts[-1] == "Randy started turn 3."
+        calls = slack.history_calls
+        assert not _check(slack, _at(0, 10, 13))
+        assert len(slack.posts) == 2 and slack.history_calls == calls
+
+    def test_a_hand_pinged_turn_is_announced_too(self, slack):
+        _turn(_at(0, 10), player="Jake DuRegger", turn=46, leader="LEADER_JFD_STANISLAW")
+        slack.say(_at(0, 10), "<@U09E350TA30> your turn")
+        assert not _check(slack, _at(0, 10, 1))
+        _taken(_at(0, 10, 5), player="Jake DuRegger", turn=46, leader="LEADER_JFD_STANISLAW")
+        assert _check(slack, _at(0, 10, 5))
+        assert slack.posts == ["Jake DuRegger started turn 46."]
+
+    def test_not_when_claude_takes_the_seat(self, slack):
+        _turn(_at(0, 10))
+        assert _check(slack, _at(0, 10, 1))
+        _taken(_at(0, 10, 5), by="claude")
+        assert not _check(slack, _at(0, 10, 5))
+        assert len(slack.posts) == 1
+
+    def test_a_restart_sends_nothing_twice(self, slack, monkeypatch):
+        _turn(_at(0, 10))
+        _taken(_at(0, 10, 5))
+        assert _check(slack, _at(0, 10, 5))
+        monkeypatch.setattr(turn_announcer, "_sent", set())
+        assert not _check(slack, _at(0, 10, 6))
+        assert slack.posts == [f"<@{RANDY}> it's your turn (today's turns: 0).", "Randy started turn 3."]
+
+    def test_a_press_found_late_is_old_news(self, slack, caplog):
+        caplog.set_level("INFO", logger="turn_announcer")
+        _turn(_at(0, 10))
+        assert _check(slack, _at(0, 10, 1))
+        _taken(_at(0, 10, 5))  # the announcer was down from 10:02 to 10:11
+        assert not _check(slack, _at(0, 10, 11))
+        assert len(slack.posts) == 1
+        assert "Randy pressed Start Turn at 10:05:00, too long ago to announce" in caplog.text
+
+    def test_start_turn_posts_do_not_hide_turns_from_the_list(self, slack):
+        # The list runs from the bot's last post; were the Start Turn posts
+        # counted, Heldi's turn (ended before Randy's press) would be lost.
+        _turn(_at(0, 10), player="Heldi", leader="LEADER_GITARJA")
+        assert _check(slack, _at(0, 10, 1))
+        _taken(_at(0, 10, 5), player="Heldi", leader="LEADER_GITARJA")
+        assert _check(slack, _at(0, 10, 5))
+        _turn(_at(0, 10, 30))  # Randy, pinged by hand
+        slack.say(_at(0, 10, 30), f"<@{RANDY}>")
+        assert not _check(slack, _at(0, 10, 31))
+        _taken(_at(0, 10, 35))
+        assert _check(slack, _at(0, 10, 35))
+        _turn(_at(0, 10, 40), player="Hunter", leader="LEADER_AMANITORE")
+        assert _check(slack, _at(0, 10, 41))
+        assert slack.posts == [
+            f"<@{HELDI}> it's your turn (today's turns: 0).",
+            "Heldi started turn 3.",
+            "Randy started turn 3.",
+            f"<@{HUNTER}> it's your turn (today's turns: 2). Since my last post: "
+            "Heldi 30m 00s (play time: 25m 00s), Randy 10m 00s (play time: 5m 00s).",
+        ]
+
+    def test_the_pattern_matches_the_message(self):
+        assert turn_announcer.STARTED_RE.fullmatch(turn_announcer.STARTED.format(name="Jake DuRegger", turn=46))
+        assert not turn_announcer.STARTED_RE.fullmatch(f"<@{RANDY}> it's your turn (today's turns: 3).")
 
 
 class TestFailures:
@@ -389,10 +463,11 @@ class TestPendingInput:
     STILL = f"<@{RANDY}> it's still your turn: the game is back on your Start Turn screen"
 
     def _interrupted(self, slack) -> datetime:
-        """Randy's turn begins at 16:28, he presses Start Turn at 16:31 and the screen is back at 16:35."""
+        """Randy's turn begins at 16:28 (two posts by then), he presses Start Turn at 16:31 and the screen is back at 16:35."""
         _turn(_at(0, 16, 28))
         assert _check(slack, _at(0, 16, 28))
         _taken(_at(0, 16, 31))
+        assert _check(slack, _at(0, 16, 31))  # "Randy started turn 3."
         _returned(_at(0, 16, 35))
         return _at(0, 16, 35)
 
@@ -400,11 +475,11 @@ class TestPendingInput:
         back = self._interrupted(slack)
         assert not _check(slack, back + timedelta(seconds=29))
         assert _check(slack, back + timedelta(seconds=30))
-        assert slack.posts[-1].startswith(self.STILL) and len(slack.posts) == 2
+        assert slack.posts[-1].startswith(self.STILL) and len(slack.posts) == 3
         calls = slack.history_calls
         assert not _check(slack, back + timedelta(seconds=31))
         assert not _check(slack, _at(1, 9, 30))  # nor the next morning: no reminder either, the turn was taken
-        assert len(slack.posts) == 2 and slack.history_calls == calls
+        assert len(slack.posts) == 3 and slack.history_calls == calls
 
     def test_it_goes_out_at_any_hour(self, slack):
         _turn(_at(0, 16, 28))
@@ -418,7 +493,7 @@ class TestPendingInput:
         back = self._interrupted(slack)
         _returned(back + timedelta(seconds=20), event="resumed")
         assert not _check(slack, back + timedelta(seconds=40))
-        assert len(slack.posts) == 1
+        assert len(slack.posts) == 2
 
     def test_each_time_the_screen_comes_back(self, slack):
         back = self._interrupted(slack)
@@ -427,7 +502,7 @@ class TestPendingInput:
         _returned(back + timedelta(minutes=3))
         assert not _check(slack, back + timedelta(minutes=3, seconds=10))
         assert _check(slack, back + timedelta(minutes=3, seconds=30))
-        assert len(slack.posts) == 3
+        assert len(slack.posts) == 4
 
     def test_not_when_claude_had_taken_the_turn(self, slack):
         _turn(_at(0, 16, 28))
@@ -441,14 +516,15 @@ class TestPendingInput:
         back = self._interrupted(slack)
         _turn(back + timedelta(seconds=10), player="Hunter", leader="LEADER_AMANITORE")
         assert _check(slack, back + timedelta(seconds=40))
-        assert len(slack.posts) == 2 and slack.posts[-1].startswith(f"<@{HUNTER}> it's your turn")
+        assert len(slack.posts) == 3 and slack.posts[-1].startswith(f"<@{HUNTER}> it's your turn")
 
     def test_a_restart_sends_nothing_twice(self, slack, monkeypatch):
         back = self._interrupted(slack)
         assert _check(slack, back + timedelta(seconds=30))
         monkeypatch.setattr(turn_announcer, "_sent", set())  # the announcer restarted
+        assert not _check(slack, back + timedelta(seconds=40))  # the Start Turn post is still within STARTED_FRESH_S
         assert not _check(slack, back + timedelta(minutes=5))
-        assert len(slack.posts) == 2
+        assert len(slack.posts) == 3
 
     def test_a_player_not_in_players_is_skipped(self, slack):
         _turn(_at(0, 16, 28), player="Player 1")

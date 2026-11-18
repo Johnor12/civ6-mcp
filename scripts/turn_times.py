@@ -51,7 +51,7 @@ turn time. A turn with no workday time at all, begun and finished outside
 it, still counts as a turn, but the averages, medians and the fastest turn
 leave it out (workday_turns): a turn played overnight says nothing about
 how long a player takes. scripts/turn_report.py
-posts player_averages() in the game channel every workday morning, and
+puts these figures on the turn times dashboard every workday morning, and
 scripts/turn_announcer.py lists the turns finished since its last post when
 it pings the next player. Standard library only; turn_logger and civ_mcp
 come from the repo.
