@@ -596,3 +596,80 @@ class TestTaken:
         log = tmp_path / "turn_log.jsonl"
         turn_logger.taken_log_path(log).write_text('{"at": "nope"}\n', encoding="utf-8")
         assert turn_logger.read_taken(log) == []
+
+
+class TestReturned:
+    """Rows in the returned log, beside the turn log: taken turns back on their turn-change screen."""
+
+    JAKE_46 = (46, "LEADER_VICTORIA", "Jake DuRegger")
+
+    def _interrupted(self, game_log) -> None:
+        """Jake's turn 46: taken at 16:31, back on his turn-change screen at 16:35 with no load."""
+        game_log.turn_line(_at(1, 16, 28), *self.JAKE_46, slot=2)
+        game_log.taken_line(_at(1, 16, 31), *self.JAKE_46, slot=2)
+        game_log.turn_line(_at(1, 16, 35), *self.JAKE_46, slot=2)
+
+    def test_a_returned_turn_until_it_is_taken_again(self, tmp_path, game_log):
+        log = tmp_path / "turn_log.jsonl"
+        watch = turn_logger.turn_watch.default()
+        assert turn_logger.turn_returned(self.JAKE_46, log) is None  # no log yet
+        self._interrupted(game_log)
+        watch.read()
+        assert turn_logger.log_returns(watch.returns, log) == 1
+        assert turn_logger.returned_log_path(log) == tmp_path / "returned_log.jsonl"
+        assert json.loads(turn_logger.returned_log_path(log).read_text(encoding="utf-8")) == {
+            "at": _at(1, 16, 35).astimezone().isoformat(timespec="seconds"), "turn": 46, "leader": "LEADER_VICTORIA",
+            "player": "Jake DuRegger", "event": "returned", "by": "player",
+        }
+        back = turn_logger.turn_returned(self.JAKE_46, log)
+        assert (back.at, back.event, back.by) == (_at(1, 16, 35), "returned", "player")
+        assert turn_logger.turn_returned((46, "LEADER_SUK_AL_HASAN", "Jeffson"), log) is None
+        watch.returns.clear()
+        game_log.taken_line(_at(2, 9, 31), *self.JAKE_46, slot=2, why="standin")  # Claude finishes it the next morning
+        watch.read()
+        assert turn_logger.log_returns(watch.returns, log) == 1
+        assert turn_logger.turn_returned(self.JAKE_46, log) is None
+        assert [(r.at, r.event, r.by) for r in turn_logger.read_returned(log)] == [
+            (_at(1, 16, 35), "returned", "player"), (_at(2, 9, 31), "resumed", "claude"),
+        ]
+
+    def test_a_restart_adds_nothing(self, tmp_path, game_log):
+        log = tmp_path / "turn_log.jsonl"
+        self._interrupted(game_log)
+        for _ in range(2):  # the logger, then the logger restarted
+            watch = turn_logger.turn_watch.TurnWatch(game_log.path)
+            watch.read()
+            turn_logger.log_returns(watch.returns, log)
+        assert len(turn_logger.read_returned(log)) == 1
+
+    def test_the_loop_writes_the_returned_log(self, tmp_path, monkeypatch, game_log):
+        _, saves, log = TestPoll()._game(tmp_path, monkeypatch)
+        watch = turn_logger.turn_watch.default()
+        started = datetime.now().replace(microsecond=0) - timedelta(minutes=5)
+        game_log.turn_line(started, 6, "LEADER_GITARJA", "Heldi", slot=3)
+        game_log.taken_line(started + timedelta(minutes=1), 6, "LEADER_GITARJA", "Heldi", slot=3)
+        turn_logger.tick(watch, 0.0, log, saves, now=100.0)
+        assert turn_logger.read_returned(log) == []
+        game_log.turn_line(started + timedelta(minutes=4), 6, "LEADER_GITARJA", "Heldi", slot=3)
+        turn_logger.tick(watch, 1e9, log, saves, now=101.0)
+        (row,) = turn_logger.read_returned(log)
+        assert (row.at, row.key, row.event) == (started + timedelta(minutes=4), HELDI_6, "returned")
+        assert watch.returns == []
+        assert len(turn_logger.read_records(log)) == 1  # still the same turn: no new row in the turn log
+
+    def test_a_bad_row_is_skipped(self, tmp_path):
+        log = tmp_path / "turn_log.jsonl"
+        turn_logger.returned_log_path(log).write_text('{"at": "nope"}\n', encoding="utf-8")
+        assert turn_logger.read_returned(log) == []
+
+
+class TestEnded:
+    def test_a_row_can_carry_when_the_turn_counts_as_over(self, tmp_path):
+        log = tmp_path / "turn_log.jsonl"
+        row = {"at": _at(1, 16, 28).astimezone().isoformat(timespec="seconds"), "turn": 46, "leader": "LEADER_VICTORIA",
+               "player": "Jake DuRegger", "poll_s": 0, "ended": _at(1, 16, 35).astimezone().isoformat(timespec="seconds"),
+               "note": "the end of turn was interrupted"}
+        log.write_text(json.dumps(row) + "\n", encoding="utf-8")
+        turn_logger.record(46, "LEADER_SUK_AL_HASAN", "Jeffson", _at(2, 9, 33), log, poll_s=0)
+        jake, jeffson = turn_logger.read_records(log)
+        assert (jake.at, jake.ended, jeffson.ended) == (_at(1, 16, 28), _at(1, 16, 35), None)

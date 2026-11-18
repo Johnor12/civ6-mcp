@@ -375,3 +375,83 @@ class TestFailures:
     def test_an_empty_turn_log_does_nothing(self, slack):
         assert not _check(slack, _at(0, 10))
         assert slack.history_calls == 0
+
+
+def _returned(at: datetime, event: str = "returned", by: str = "player", player: str = "Randy", turn: int = 3,
+              leader: str = "LEADER_GENGHIS_KHAN") -> None:
+    """The returned log row the turn logger writes when a taken turn is back on its turn-change screen, or leaves it."""
+    assert turn_logger.log_returns([turn_logger.turn_watch.TurnReturn(at, turn, leader, player, event, by)]) == 1
+
+
+class TestPendingInput:
+    """A taken turn back on its turn-change screen: the end of turn was interrupted and the game waits for input."""
+
+    STILL = f"<@{RANDY}> it's still your turn: the game is back on your Start Turn screen"
+
+    def _interrupted(self, slack) -> datetime:
+        """Randy's turn begins at 16:28, he presses Start Turn at 16:31 and the screen is back at 16:35."""
+        _turn(_at(0, 16, 28))
+        assert _check(slack, _at(0, 16, 28))
+        _taken(_at(0, 16, 31))
+        _returned(_at(0, 16, 35))
+        return _at(0, 16, 35)
+
+    def test_after_thirty_seconds_the_player_is_told_once(self, slack):
+        back = self._interrupted(slack)
+        assert not _check(slack, back + timedelta(seconds=29))
+        assert _check(slack, back + timedelta(seconds=30))
+        assert slack.posts[-1].startswith(self.STILL) and len(slack.posts) == 2
+        calls = slack.history_calls
+        assert not _check(slack, back + timedelta(seconds=31))
+        assert not _check(slack, _at(1, 9, 30))  # nor the next morning: no reminder either, the turn was taken
+        assert len(slack.posts) == 2 and slack.history_calls == calls
+
+    def test_it_goes_out_at_any_hour(self, slack):
+        _turn(_at(0, 16, 28))
+        _taken(_at(0, 19))
+        _returned(_at(0, 19, 5))
+        _check(slack, _at(0, 19, 5))
+        assert _check(slack, _at(0, 19, 6))
+        assert slack.posts[-1].startswith(self.STILL)
+
+    def test_not_when_start_turn_was_pressed_again_in_time(self, slack):
+        back = self._interrupted(slack)
+        _returned(back + timedelta(seconds=20), event="resumed")
+        assert not _check(slack, back + timedelta(seconds=40))
+        assert len(slack.posts) == 1
+
+    def test_each_time_the_screen_comes_back(self, slack):
+        back = self._interrupted(slack)
+        assert _check(slack, back + timedelta(seconds=30))
+        _returned(back + timedelta(minutes=2), event="resumed")
+        _returned(back + timedelta(minutes=3))
+        assert not _check(slack, back + timedelta(minutes=3, seconds=10))
+        assert _check(slack, back + timedelta(minutes=3, seconds=30))
+        assert len(slack.posts) == 3
+
+    def test_not_when_claude_had_taken_the_turn(self, slack):
+        _turn(_at(0, 16, 28))
+        assert _check(slack, _at(0, 16, 28))
+        _taken(_at(0, 16, 31), by="claude")
+        _returned(_at(0, 16, 35), by="claude")  # its end_turn takes the seat back by itself
+        assert not _check(slack, _at(0, 16, 36))
+        assert len(slack.posts) == 1
+
+    def test_not_once_the_game_moved_on(self, slack):
+        back = self._interrupted(slack)
+        _turn(back + timedelta(seconds=10), player="Hunter", leader="LEADER_AMANITORE")
+        assert _check(slack, back + timedelta(seconds=40))
+        assert len(slack.posts) == 2 and slack.posts[-1].startswith(f"<@{HUNTER}> it's your turn")
+
+    def test_a_restart_sends_nothing_twice(self, slack, monkeypatch):
+        back = self._interrupted(slack)
+        assert _check(slack, back + timedelta(seconds=30))
+        monkeypatch.setattr(turn_announcer, "_sent", set())  # the announcer restarted
+        assert not _check(slack, back + timedelta(minutes=5))
+        assert len(slack.posts) == 2
+
+    def test_a_player_not_in_players_is_skipped(self, slack):
+        _turn(_at(0, 16, 28), player="Player 1")
+        _returned(_at(0, 16, 35), player="Player 1")
+        assert not _check(slack, _at(0, 16, 36))
+        assert slack.posts == []

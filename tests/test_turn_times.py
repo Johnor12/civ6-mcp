@@ -728,3 +728,50 @@ def test_the_cli_report_has_the_play_time(game):
     text = turn_times.report(seq, skipped, turns=True)
     assert "taken 11:30:00 by Claude, play time: 5m 00s" in text
     assert "16m 00s (2)" in text and "Claude" in text
+
+
+# "ended" in a turn log row: the turn counts as over then, before the next one began.
+
+def _set_ended(game, line: int, ended: datetime) -> None:
+    lines = game.log_path.read_text(encoding="utf-8").splitlines()
+    row = json.loads(lines[line])
+    row["ended"] = ended.astimezone().isoformat(timespec="seconds")
+    lines[line] = json.dumps(row)
+    game.log_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def test_a_turn_with_ended_stops_there_and_the_rest_counts_for_nobody(game):
+    # 17 Nov 2026: Jake's turn began 16:28, he pressed Start Turn at 16:31 and End Turn at 16:35; the game
+    # handed the turn back unnoticed, and Claude finished it at 9:33 the next morning.
+    game.row(at(16, 8), 1, "LEADER_A", poll_s=0)
+    game.row(at(16, 28), 1, "LEADER_B", poll_s=0)
+    game.taken(at(16, 31), 1, "LEADER_B")
+    game.taken(at(24 + 9, 31), 1, "LEADER_B", by="claude")
+    game.row(at(24 + 9, 33), 1, "LEADER_C", poll_s=0)
+    game.row(at(24 + 9, 40), 1, "LEADER_D", poll_s=0)
+    seq, _ = game.compute()
+    bob = seq[1]
+    ends = {pt.player: end for pt, end in turn_times.finished(seq)}
+    assert turn_times.minutes(bob, ends["Bob"]) == 32 + 33  # as logged: to 17:00, then 9:00 to 9:33
+    assert bob.claude
+
+    _set_ended(game, 1, at(16, 35))
+    seq, _ = game.compute()
+    _, bob, cy, _ = seq
+    ends = {pt.player: end for pt, end in turn_times.finished(seq)}
+    assert ends["Bob"] == at(16, 35) and ends["Ann"] == at(16, 28)
+    assert turn_times.overall_minutes(bob, ends["Bob"]) == 7
+    assert turn_times.take_minutes(bob, ends["Bob"]) == 4
+    assert (bob.taken, bob.claude) == (at(16, 31), False)  # Claude's row is from after it was over
+    assert turn_times.claude_takes(turn_times.finished(seq)) == []
+    assert cy.start == at(24 + 9, 33) and turn_times.minutes(cy, ends["Cy"]) == 7  # the next turn starts at its own row
+    assert turn_times.workday_of(ends["Bob"]) == TUESDAY.date()  # and it is Tuesday's turn
+
+
+def test_an_ended_outside_the_turn_is_brought_inside(game):
+    game.row(at(10), 1, "LEADER_A", poll_s=0)
+    game.row(at(10, 30), 1, "LEADER_B", poll_s=0)
+    for ended, expected in ((at(9), at(10)), (at(11), at(10, 30))):
+        _set_ended(game, 0, ended)
+        seq, _ = game.compute()
+        assert turn_times.finished(seq)[0][1] == expected

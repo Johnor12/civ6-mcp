@@ -46,6 +46,16 @@ line stands in for it, timed by when the watch read it, which is at most
 `late_s` after the press. The watch's first read cannot time such a line
 and passes it over.
 
+A turn that was taken and then shows its turn-change screen again with no
+save loaded is one whose end the game interrupted: the player pressed End
+Turn, something came up while the turn ended (research ran out, an
+automated scout met someone) and the game handed the turn back for more
+input, behind the Start Turn button. TurnWatch.returns (the reader clears
+it) has a RETURNED event for it and a RESUMED one when the turn is taken
+again from there, or a save is loaded into it. Only a turn whose "play" or
+"standin" line was read counts: a game on a copy of the mod from before
+those lines cannot say when the turn was taken again.
+
 Lua.log is a feed, not a record: Civ 6 empties it every time it is
 launched and keeps no copy. The turn logger (scripts/turn_logger.py) is
 its one reader here: it copies each turn line into
@@ -69,6 +79,7 @@ TURN_LINE = re.compile(
     r"\|(?P<why>begin|load|play|standin)\s*$"
 )
 CLAUDE, PLAYER = "claude", "player"  # who took a turn (TurnTaken.by)
+RETURNED, RESUMED = "returned", "resumed"  # what a taken turn did (TurnReturn.event)
 SCREEN_LINE = re.compile(r"^PlayerChange: BuildTurnControls: CurrentGameTurn=\d+")
 START_TURN_LINE = re.compile(r"^UnitPanel: OnPlayerChangeClose: (?P<slot>-?\d+)")
 LOAD_PICKED_LINE = re.compile(r"LoadGameMenu::OnLoadYes\(\)")
@@ -121,6 +132,22 @@ class TurnTaken:
         return self.turn, self.leader, self.player
 
 
+@dataclass(frozen=True)
+class TurnReturn:
+    """A taken turn back on its turn-change screen with no save loaded, or leaving that screen again."""
+
+    at: datetime  # local time, naive, to the second
+    turn: int
+    leader: str
+    player: str
+    event: str  # RETURNED: the screen came back; RESUMED: the turn was taken again, or a save was loaded into it
+    by: str  # PLAYER or CLAUDE: who had taken the turn when it came back; who took it again
+
+    @property
+    def key(self) -> tuple[int, str, str]:
+        return self.turn, self.leader, self.player
+
+
 def _match(line: str) -> re.Match | None:
     return TURN_LINE.search(line) if "|T|" in line else None
 
@@ -167,6 +194,9 @@ class TurnWatch:
         self.screens = 0  # the game's own turn-change screen lines read
         self.reloads: list[TurnStart] = []  # turn lines that came right after a load; the reader clears it
         self.taken: list[TurnTaken] = []  # turns being taken, oldest first; the reader clears it
+        self.returns: list[TurnReturn] = []  # taken turns back on their screen, and leaving it; the reader clears it
+        self._taker: dict[tuple[int, str, str], str] = {}  # who last took each turn, by its "play" or "standin" line
+        self._back: set[tuple[int, str, str]] = set()  # taken turns back on their turn-change screen
         self._seen: set[tuple[int, str, str]] = set()  # turns a turn line was read for
         self._started: set[tuple[int, str, str]] = set()  # turns whose player pressed Start Turn
         self._claude: set[tuple[int, str, str]] = set()  # turns Claude took the seat of
@@ -183,12 +213,20 @@ class TurnWatch:
             taken = replace(taken, by=CLAUDE)
         return taken
 
+    def _resume(self, at: datetime, key: tuple[int, str, str], by: str) -> None:
+        """The turn `key` left the turn-change screen it had come back to, if it was on it."""
+        if key in self._back:
+            self._back.discard(key)
+            self.returns.append(TurnReturn(at, *key, RESUMED, by))
+
     def read(self) -> list[TurnStart]:
         """The turn lines written since the last read, oldest first; the whole log's on the first read.
 
         Turns being taken go into `taken`. When this read has a "play" or
         "standin" line for a turn, a UnitPanel line timed by this read for
-        the same turn and taker is left out.
+        the same turn and taker is left out. A turn line with no load
+        before it, for a turn already taken, goes into `returns`, and so
+        does whatever takes the turn off that screen again.
         """
         restarts = self._tail.restarts
         lines = self._tail.read_lines()
@@ -202,7 +240,10 @@ class TurnWatch:
             if (line_taken := parse_taken(line)) is not None:
                 if line_taken.by == PLAYER:
                     self._started.add(line_taken.key)
-                taken.append(self._take(line_taken))
+                line_taken = self._take(line_taken)
+                taken.append(line_taken)
+                self._taker[line_taken.key] = line_taken.by
+                self._resume(line_taken.at, line_taken.key, line_taken.by)
                 continue
             start = parse(line)
             if start is not None:
@@ -212,6 +253,10 @@ class TurnWatch:
                     start = replace(start, reload=Reload(relaunched, menu, had_started))
                     self.reloads.append(start)
                     self._loaded = None
+                    self._resume(start.at, start.key, self._taker.get(start.key, PLAYER))
+                elif not start.loaded and start.key in self._taker and start.key not in self._back:
+                    self._back.add(start.key)  # the end of the turn was interrupted
+                    self.returns.append(TurnReturn(start.at, *start.key, RETURNED, self._taker[start.key]))
                 self._picked = False  # a pick still pending never loaded
                 self._seen.add(start.key)
                 self.latest = start

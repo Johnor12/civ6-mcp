@@ -36,6 +36,20 @@ time; a second or two from the game's own line when the game runs a copy of
 the mod from before those lines (civ_mcp.turn_watch). scripts/turn_times.py
 measures a turn's play time from there to the turn's end.
 
+A turn whose end the game interrupted is back on its turn-change screen
+with the player none the wiser: they pressed End Turn, something came up
+while the turn ended, and the game waits behind the Start Turn button for
+more input. scripts/data/returned_log.jsonl (beside the turn log) gets a
+"returned" row when a turn that was taken shows its turn-change screen
+again with no save loaded, and a "resumed" row when it is taken again from
+there (civ_mcp.turn_watch). turn_returned() is the turn's "returned" row
+while it still sits there; the turn announcer tells the player after 30
+seconds of that.
+
+A row of the turn log can carry "ended", written by hand: the turn counts
+as over at that time instead of when the next one began, and the time in
+between counts for nobody (scripts/turn_times.py).
+
 Every save loaded into the game gets a row in scripts/data/reload_log.jsonl
 (beside the turn log), from the turn line that follows the load: the
 turn the save was on, whether Civ 6 had been closed and launched again
@@ -91,13 +105,14 @@ if TYPE_CHECKING:
     from collections.abc import Iterable
 
     from civ_mcp.bridge import BridgeConnection
-    from civ_mcp.turn_watch import TurnStart, TurnTaken, TurnWatch
+    from civ_mcp.turn_watch import TurnReturn, TurnStart, TurnTaken, TurnWatch
 
 log = logging.getLogger("turn_logger")
 
 TURN_LOG_PATH = REPO_ROOT / "scripts" / "data" / "turn_log.jsonl"
 RELOAD_LOG_NAME = "reload_log.jsonl"  # beside the turn log
 TAKEN_LOG_NAME = "taken_log.jsonl"  # beside the turn log
+RETURNED_LOG_NAME = "returned_log.jsonl"  # beside the turn log
 SNAPSHOTS_DIR = snapshots_dir()  # the bridge mod's saves from each opening of the pause menu
 SNAPSHOT_KEEP_S = 7 * 86400  # how long a snapshot no reload log row names is kept (~2 MB each)
 WATCH_S = 1  # how often the loop reads what Lua.log gained
@@ -130,6 +145,7 @@ class TurnRecord:
     leader: str  # e.g. LEADER_POUNDMAKER
     player: str  # hotseat player name shown on the turn-change screen
     poll_s: int | None = None  # how late the row can be: 0 from a turn line; None in rows from before 2026-11-03
+    ended: datetime | None = None  # written by hand: the turn counts as over then, not when the next one began
 
     @property
     def key(self) -> tuple[int, str, str]:
@@ -150,7 +166,8 @@ def read_records(path: Path | None = None) -> list[TurnRecord]:
             row = json.loads(line)
             at = datetime.fromisoformat(row["at"]).astimezone().replace(tzinfo=None)
             poll_s = int(row["poll_s"]) if row.get("poll_s") is not None else None
-            records.append(TurnRecord(at, int(row["turn"]), row["leader"], row["player"], poll_s))
+            ended = _local(row["ended"]) if row.get("ended") else None
+            records.append(TurnRecord(at, int(row["turn"]), row["leader"], row["player"], poll_s, ended))
         except (ValueError, KeyError, TypeError):
             log.warning("skipping a bad row in %s: %r", path, line)
     return records
@@ -290,6 +307,89 @@ def log_taken(items: Iterable[TurnTaken], path: Path | None = None) -> int:
             f"{t.player} pressed Start Turn" if t.by == turn_watch.PLAYER else f"Claude took {t.player}'s seat",
             f"{t.at:%H:%M:%S}",
             f" (read up to {t.late_s} s after)" if t.late_s else "",
+        )
+    return added
+
+
+def returned_log_path(path: Path | None = None) -> Path:
+    """The returned log beside the turn log at `path`."""
+    return (path or TURN_LOG_PATH).with_name(RETURNED_LOG_NAME)
+
+
+@dataclass(frozen=True)
+class ReturnedRecord:
+    """A row of the returned log: a taken turn back on its turn-change screen, or leaving it again."""
+
+    at: datetime  # local time, naive
+    turn: int
+    leader: str
+    player: str  # whose turn it is
+    event: str  # "returned" (the screen came back, no save loaded) or "resumed" (taken again, or a save loaded)
+    by: str  # "player" or "claude": who had taken the turn when it came back; who took it again
+
+    @property
+    def key(self) -> tuple[int, str, str]:
+        return self.turn, self.leader, self.player
+
+
+def read_returned(path: Path | None = None) -> list[ReturnedRecord]:
+    """The returned log's rows; `path` is the turn log beside it."""
+    returned_path = returned_log_path(path)
+    if not returned_path.exists():
+        return []
+    rows = []
+    for line in returned_path.read_text(encoding="utf-8").splitlines():
+        try:
+            row = json.loads(line)
+            rows.append(ReturnedRecord(
+                _local(row["at"]), int(row["turn"]), row["leader"], row["player"], row["event"], row["by"]
+            ))
+        except (ValueError, KeyError, TypeError):
+            log.warning("skipping a bad row in %s: %r", returned_path, line)
+    return rows
+
+
+def turn_returned(key: tuple[int, str, str], path: Path | None = None) -> ReturnedRecord | None:
+    """The "returned" row of the turn `key` while it still sits on the turn-change screen it came back to, else None.
+
+    The turn's last row decides: None once it was taken again ("resumed")
+    and for a turn that never came back. `path` is the turn log; the
+    returned log is beside it.
+    """
+    last = None
+    for r in read_returned(path):
+        if r.key == key:
+            last = r
+    return last if last is not None and last.event == turn_watch.RETURNED else None
+
+
+def log_returns(items: Iterable[TurnReturn], path: Path | None = None) -> int:
+    """Add a returned log row for each event it has none for yet; the number added.
+
+    `path` is the turn log; the returned log is beside it. An event the
+    log already has (same time, turn and kind) is passed over, so the
+    whole of Lua.log can be offered again after a restart.
+    """
+    done = {(r.at, r.key, r.event) for r in read_returned(path)}
+    added = 0
+    for e in items:
+        if (e.at, e.key, e.event) in done:
+            continue
+        row = {"at": _stamp(e.at), "turn": e.turn, "leader": e.leader, "player": e.player, "event": e.event, "by": e.by}
+        returned_path = returned_log_path(path)
+        returned_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(returned_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(row) + "\n")
+        done.add((e.at, e.key, e.event))
+        added += 1
+        who = "Claude" if e.by == turn_watch.CLAUDE else e.player
+        log.info(
+            "turn %d: %s at %s",
+            e.turn,
+            f"{e.player}'s turn-change screen is back (taken by {who}, no save loaded): the end of turn was interrupted"
+            if e.event == turn_watch.RETURNED
+            else f"{who} took {e.player}'s turn again from the screen it came back to",
+            f"{e.at:%H:%M:%S}",
         )
     return added
 
@@ -475,7 +575,8 @@ def tick(
     poll's. A turn line or a turn-change screen line sets off a poll at
     once, which sees that the new turn has a save. Loads the watch saw,
     in this pass or the poll's read, go into the reload log, turns being
-    taken into the taken log, and a pass that polled prunes old snapshots.
+    taken into the taken log, turns back on their turn-change screen into
+    the returned log, and a pass that polled prunes old snapshots.
     """
     now = time.monotonic() if now is None else now
     polled = True
@@ -504,6 +605,12 @@ def tick(
             watch.taken.clear()
     except Exception:
         log.exception("could not log a turn being taken")
+    try:
+        if watch.returns:
+            log_returns(watch.returns, path)
+            watch.returns.clear()
+    except Exception:
+        log.exception("could not log a turn back on its turn-change screen")
     return now + POLL_S if polled else next_poll
 
 

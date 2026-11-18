@@ -32,6 +32,13 @@ the player's: player_averages leaves it out of the player's play time
 and claude_takes lists it, while its turn time still counts for the player.
 Turns from before the taken log began have a workday time only.
 
+A turn ends when the next one begins, unless its turn log row carries
+"ended" (written by hand, for a turn the system kept counting after its
+player was done: an end of turn the game interrupted without anyone being
+told). Such a turn counts as over at that time: the time from then to the
+next turn's start counts for nobody, and whoever took the seat after it to
+finish the turn (Claude, usually) does not make it a turn they took.
+
 A turn's workday time (minutes) is minutes of workday time
 (turn_logger.WORKDAY, what the bot's turn limit counts), so a turn held
 overnight costs nothing. Play time is minutes at any hour: a turn taken at
@@ -125,6 +132,7 @@ class PlayerTurn:
     basis: str = ""  # autosave | row | save | row+save | interpolated
     taken: datetime | None = None  # first taken log row, the middle of its window; None: none
     claude: bool = False  # Claude took the seat on this turn
+    ended: datetime | None = None  # the turn log's "ended": it counts as over then, before the next one began
 
     @property
     def evidence(self) -> list[datetime]:
@@ -194,6 +202,8 @@ def player_turns(
         if not cur.rows:
             cur.poll_s = r.poll_s if r.poll_s is not None else poll_at(r.at)
         cur.rows.append(r.at)
+        if r.ended is not None:
+            cur.ended = r.ended
     seq.append(cur)
     return seq
 
@@ -337,12 +347,13 @@ def attach_taken(seq: list[PlayerTurn], rows: list[turn_logger.TakenRecord]) -> 
 
     A row's time is placed in the middle of its window (poll_s), and never
     before the turn's own start. Rows of turns the log does not cover are
-    passed over.
+    passed over, and so are rows from after the turn's "ended": the turn
+    counts as over by then.
     """
     index = {(pt.turn, pt.leader): pt for pt in seq}
     for r in rows:
         pt = index.get((r.turn, r.leader))
-        if pt is None:
+        if pt is None or (pt.ended is not None and r.at > pt.ended):
             continue
         at = max(r.at - timedelta(seconds=r.poll_s / 2), pt.start)
         pt.taken = at if pt.taken is None else min(pt.taken, at)
@@ -350,8 +361,15 @@ def attach_taken(seq: list[PlayerTurn], rows: list[turn_logger.TakenRecord]) -> 
 
 
 def finished(seq: list[PlayerTurn]) -> list[tuple[PlayerTurn, datetime]]:
-    """Every player-turn that has ended, with its end (the next turn's start)."""
-    return [(pt, nxt.start) for pt, nxt in zip(seq, seq[1:])]
+    """Every player-turn that has ended, with its end: the next turn's start, or its own "ended" when it has one.
+
+    An "ended" outside the turn (before its start, after the next one's) is
+    brought back inside it.
+    """
+    return [
+        (pt, nxt.start if pt.ended is None else min(max(pt.ended, pt.start), nxt.start))
+        for pt, nxt in zip(seq, seq[1:])
+    ]
 
 
 def workday_of(when: datetime) -> date:

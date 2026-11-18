@@ -241,3 +241,92 @@ def test_the_first_read_cannot_time_the_games_line(game_log):
     game_log.load()
     game_log.turn_line(T0.replace(minute=50), 18, "LEADER_CLEOPATRA", "Aaron", why="load")
     assert watch.read()[0].reload.had_started is True  # still counts for the reload log
+
+
+# Taken turns back on their turn-change screen: an end of turn the game interrupted.
+
+JAKE_46 = (46, "LEADER_VICTORIA", "Jake DuRegger")
+
+
+def _jake_ends_his_turn(game_log, watch):
+    """17 Nov 2026: Jake's turn 46 begins, he presses Start Turn, ends the turn, and the game hands it back."""
+    game_log.screen_line(46)
+    game_log.turn_line(T0, *JAKE_46, slot=2)
+    game_log.start_turn(2)
+    game_log.taken_line(T0.replace(minute=23), *JAKE_46, slot=2)
+    game_log.screen_line(46)
+    game_log.turn_line(T0.replace(minute=27), *JAKE_46, slot=2)
+    watch.read()
+
+
+def test_a_taken_turn_back_on_its_screen_without_a_load_has_returned(game_log):
+    watch = TurnWatch(game_log.path)
+    _jake_ends_his_turn(game_log, watch)
+    assert watch.returns == [turn_watch.TurnReturn(T0.replace(minute=27), *JAKE_46, "returned", "player")]
+    assert watch.reloads == []
+
+
+def test_start_turn_again_resumes_it(game_log):
+    watch = TurnWatch(game_log.path)
+    _jake_ends_his_turn(game_log, watch)
+    watch.returns.clear()
+    game_log.start_turn(2)
+    game_log.taken_line(T0.replace(minute=40), *JAKE_46, slot=2)
+    game_log.taken_line(T0.replace(minute=41), *JAKE_46, slot=2)  # nothing to resume any more
+    watch.read()
+    assert watch.returns == [turn_watch.TurnReturn(T0.replace(minute=40), *JAKE_46, "resumed", "player")]
+
+
+def test_claude_taking_the_seat_resumes_it_and_its_own_returns_are_claudes(game_log):
+    watch = TurnWatch(game_log.path)
+    _jake_ends_his_turn(game_log, watch)
+    watch.returns.clear()
+    game_log.taken_line(T0.replace(minute=50), *JAKE_46, slot=2, why="standin")
+    game_log.start_turn(2)
+    game_log.taken_line(T0.replace(minute=50), *JAKE_46, slot=2)
+    game_log.turn_line(T0.replace(minute=55), *JAKE_46, slot=2)  # interrupted once more
+    watch.read()
+    assert [(r.at.minute, r.event, r.by) for r in watch.returns] == [(50, "resumed", "claude"), (55, "returned", "claude")]
+
+
+def test_a_turn_nobody_took_has_not_returned(game_log):
+    watch = TurnWatch(game_log.path)
+    game_log.turn_line(T0, 18, "LEADER_CLEOPATRA", "Aaron")
+    game_log.turn_line(T0.replace(minute=30), 18, "LEADER_CLEOPATRA", "Aaron")
+    game_log.turn_line(T0.replace(minute=40), 18, "LEADER_NZINGA_MBANDE", "Aidan", slot=1)
+    watch.read()
+    assert watch.returns == []
+
+
+def test_without_the_mods_press_line_nothing_returns(game_log):
+    # A copy of the mod from before "play" lines could not say when the turn was taken again.
+    watch = TurnWatch(game_log.path)
+    game_log.turn_line(T0, 18, "LEADER_CLEOPATRA", "Aaron")
+    watch.read()
+    game_log.start_turn(0)
+    game_log.turn_line(T0.replace(minute=30), 18, "LEADER_CLEOPATRA", "Aaron")
+    watch.read()
+    assert watch.returns == []
+
+
+def test_a_load_is_not_a_return_and_ends_one(game_log):
+    watch = TurnWatch(game_log.path)
+    game_log.turn_line(T0, 18, "LEADER_CLEOPATRA", "Aaron")
+    game_log.taken_line(T0.replace(minute=22), 18, "LEADER_CLEOPATRA", "Aaron")
+    game_log.load()
+    game_log.turn_line(T0.replace(minute=30), 18, "LEADER_CLEOPATRA", "Aaron")  # replayed from its start
+    watch.read()
+    assert watch.returns == [] and len(watch.reloads) == 1
+    game_log.taken_line(T0.replace(minute=31), 18, "LEADER_CLEOPATRA", "Aaron")
+    game_log.turn_line(T0.replace(minute=35), 18, "LEADER_CLEOPATRA", "Aaron")  # the end of turn interrupted
+    game_log.load()
+    game_log.turn_line(T0.replace(minute=45), 18, "LEADER_CLEOPATRA", "Aaron", why="load")  # a save loaded into it
+    watch.read()
+    assert [(r.at.minute, r.event) for r in watch.returns] == [(35, "returned"), (45, "resumed")]
+
+
+def test_a_restarted_watch_reads_the_same_events_again(game_log):
+    _jake_ends_his_turn(game_log, TurnWatch(game_log.path))
+    watch = TurnWatch(game_log.path)
+    watch.read()
+    assert watch.returns == [turn_watch.TurnReturn(T0.replace(minute=27), *JAKE_46, "returned", "player")]

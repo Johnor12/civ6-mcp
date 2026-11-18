@@ -48,6 +48,15 @@ logger) has a row for it when the player has pressed Start Turn or Claude
 has taken the seat, and a player already playing has no use for a nudge.
 The start-of-turn message still goes out, for the list it carries.
 
+A turn that was taken can come back: the player presses End Turn, something
+comes up while the turn ends, and the game puts their Start Turn screen up
+again and waits there for more input, with the player long gone. When the
+returned log (scripts/data/returned_log.jsonl, also kept by the turn logger)
+says the current turn has sat back on its turn-change screen for PENDING_S
+(30 seconds of real time, at any hour), the bot tells the player it is still
+their turn. Not when Claude had taken the turn: its end_turn takes the seat
+back by itself.
+
 A player can opt out of single messages (OPTED_OUT, by the stage's workday
 time): Hunter gets no 15-minute reminder, but the 30-minute one and the rest.
 
@@ -96,6 +105,11 @@ REMINDERS_S = (900, 1800)  # workday time before each reminder
 OPTED_OUT: dict[str, frozenset[int]] = {
     "Hunter": frozenset({900}),  # no 15m reminder (asked 2026-11-13)
 }
+PENDING_S = 30  # real seconds a taken turn sits back on its turn-change screen before its player is told
+PENDING = (
+    "{mention} it's still your turn: the game is back on your Start Turn screen, so something still needs "
+    "your input before the turn can end. Press Start Turn again and finish it."
+)
 LOOKBACK_S = 24 * 3600  # how far back the turn message looks for the bot's last post
 HAND_PING_S = 60  # a mention this long before the turn began counts as the hand ping
 LOCK_PATH = REPO_ROOT / "scripts" / "data" / "turn_announcer.lock"
@@ -152,6 +166,43 @@ def _announce(client, now: datetime) -> bool:
     if current is None:
         return False
     rec, worked = current
+    pending = _pending_input(client, rec, now)
+    return _stage_message(client, rec, worked, now) or pending
+
+
+def _pending_input(client, rec: turn_logger.TurnRecord, now: datetime) -> bool:
+    """Tell the player whose taken turn has sat back on its turn-change screen for PENDING_S; True when posted.
+
+    Sent once per time the screen came back: the bot's own mention of the
+    player since then counts as sent, so a restart sends nothing twice.
+    """
+    back = turn_logger.turn_returned(rec.key)
+    if back is None or back.by != turn_logger.turn_watch.PLAYER:
+        return False
+    sent = (rec.key, "pending", back.at)
+    if sent in _sent or (now - back.at).total_seconds() < PENDING_S:
+        return False
+    player = player_named(rec.player)
+    if player is None:
+        log.warning("%s's turn %d is back on its turn-change screen but they are not in PLAYERS", rec.player, rec.turn)
+        _sent.add(sent)
+        return False
+    posted = False
+    with posting_lock():
+        if not mentioned(client, player.slack_id, back.at, from_bot=True):
+            text = PENDING.format(mention=f"<@{player.slack_id}>")
+            client.chat_postMessage(channel=CHANNEL, text=text)
+            log.info(
+                "told %s turn %d is back on its turn-change screen since %s: %s",
+                player.name, rec.turn, f"{back.at:%H:%M:%S}", text,
+            )
+            posted = True
+    _sent.add(sent)
+    return posted
+
+
+def _stage_message(client, rec: turn_logger.TurnRecord, worked: float, now: datetime) -> bool:
+    """Post the start-of-turn message or the reminder the turn is due for, unless it is in the channel; True when posted."""
     stage = max(i for i, (after, _) in enumerate(STAGES) if worked >= after)
     if (rec.key, stage) in _sent:
         return False
@@ -328,8 +379,9 @@ def main() -> None:
         raise SystemExit(f"SLACK_BOT_TOKEN must be set in {REPO_ROOT / '.env'}")
     client = WebClient(token=token)
     log.info(
-        "reading the turn log every %d s; channel %s; reminders after %s of workday time",
-        POLL_S, CHANNEL, ", ".join(duration(after) for after, _ in STAGES[1:]),
+        "reading the turn log every %d s; channel %s; reminders after %s of workday time; "
+        "a taken turn back on its turn-change screen for %d s gets its player told",
+        POLL_S, CHANNEL, ", ".join(duration(after) for after, _ in STAGES[1:]), PENDING_S,
     )
     while True:
         announce(client)
