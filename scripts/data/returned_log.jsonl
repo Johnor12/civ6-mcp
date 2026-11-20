@@ -36,3 +36,19 @@
 {"at": "2026-11-18T09:31:27-05:00", "turn": 46, "leader": "LEADER_VICTORIA", "player": "Jake DuRegger", "event": "resumed", "by": "claude"}
 {"at": "2026-11-18T12:00:04-05:00", "turn": 47, "leader": "LEADER_SUK_AL_HASAN", "player": "Jeffson", "event": "returned", "by": "player"}
 {"at": "2026-11-18T12:00:14-05:00", "turn": 47, "leader": "LEADER_SUK_AL_HASAN", "player": "Jeffson", "event": "resumed", "by": "player"}
+{"at": "2026-11-19T09:02:20-05:00", "turn": 48, "leader": "LEADER_AMANITORE", "player": "Hunter", "event": "returned", "by": "player"}
+{"at": "2026-11-19T09:02:21-05:00", "turn": 48, "leader": "LEADER_AMANITORE", "player": "Hunter", "event": "resumed", "by": "player"}
+{"at": "2026-11-19T11:29:31-05:00", "turn": 49, "leader": "LEADER_JULIUS_CAESAR", "player": "Cameron", "event": "returned", "by": "player"}
+{"at": "2026-11-19T11:29:35-05:00", "turn": 49, "leader": "LEADER_JULIUS_CAESAR", "player": "Cameron", "event": "resumed", "by": "player"}
+{"at": "2026-11-19T16:03:06-05:00", "turn": 50, "leader": "LEADER_GENGHIS_KHAN", "player": "Randy", "event": "returned", "by": "player"}
+{"at": "2026-11-19T16:03:09-05:00", "turn": 50, "leader": "LEADER_GENGHIS_KHAN", "player": "Randy", "event": "resumed", "by": "player"}
+{"at": "2026-11-19T16:08:10-05:00", "turn": 50, "leader": "LEADER_AMANITORE", "player": "Hunter", "event": "returned", "by": "player"}
+{"at": "2026-11-19T16:08:13-05:00", "turn": 50, "leader": "LEADER_AMANITORE", "player": "Hunter", "event": "resumed", "by": "player"}
+{"at": "2026-11-20T10:25:17-05:00", "turn": 51, "leader": "LEADER_GITARJA", "player": "Heldi", "event": "returned", "by": "player"}
+{"at": "2026-11-20T10:25:20-05:00", "turn": 51, "leader": "LEADER_GITARJA", "player": "Heldi", "event": "resumed", "by": "player"}
+{"at": "2026-11-20T13:38:05-05:00", "turn": 52, "leader": "LEADER_NZINGA_MBANDE", "player": "Aidan", "event": "returned", "by": "player"}
+{"at": "2026-11-20T13:38:06-05:00", "turn": 52, "leader": "LEADER_NZINGA_MBANDE", "player": "Aidan", "event": "resumed", "by": "player"}
+{"at": "2026-11-20T13:53:45-05:00", "turn": 52, "leader": "LEADER_VICTORIA", "player": "Jake DuRegger", "event": "returned", "by": "player"}
+{"at": "2026-11-20T13:53:47-05:00", "turn": 52, "leader": "LEADER_VICTORIA", "player": "Jake DuRegger", "event": "resumed", "by": "player"}
+{"at": "2026-11-20T15:25:20-05:00", "turn": 52, "leader": "LEADER_AMANITORE", "player": "Hunter", "event": "returned", "by": "player"}
+{"at": "2026-11-20T15:25:21-05:00", "turn": 52, "leader": "LEADER_AMANITORE", "player": "Hunter", "event": "resumed", "by": "player"}
