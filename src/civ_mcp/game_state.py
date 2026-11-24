@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+from pathlib import Path
 
 from civ_mcp import lua as lq
+from civ_mcp import screen
 from civ_mcp.bridge import BridgeConnection
 from civ_mcp.narrate import (
     narrate_combat_estimate,
@@ -1327,28 +1329,113 @@ class GameState:
 
 
     async def dismiss_popup(self) -> str:
-        """Dismiss blocking popups that can be closed from outside their context.
+        """Dismiss the popups that are showing.
 
-        Popups that hold an engine event until their own close button runs
-        (natural wonder, wonder built, era complete, tutorial advisor, ...)
-        are only reported: they need ESC or a click at the keyboard.
+        Some can be closed from outside their context. The rest (tech or
+        civic completed, era complete, era review, natural wonder, wonder
+        built, ...) run their own Close() only from their own input handler,
+        so they get what a person would give them: an ESC key press in the
+        game window. A diplomacy screen is never closed this way; it has
+        its own tools.
         """
         lines = await self.conn.execute(_DISMISS_POPUP_LUA)
         dismissed = [l.split("|", 1)[1] for l in lines if l.startswith("DISMISSED|")]
         visible = [l.split("|", 1)[1] for l in lines if l.startswith("VISIBLE|")]
+        pending = [l for l in lines if l.startswith("PENDING|")]
+        problem = ""
+        if visible and not pending:
+            closed, visible, problem = await self._close_with_escape(visible, "MENU" in lines)
+            dismissed += closed
         parts = []
         if dismissed:
             parts.append(f"Dismissed: {', '.join(dismissed)}.")
         if visible:
+            why = f" ({problem})" if problem else ""
             parts.append(
-                "Still showing (needs the in-game close button or ESC): "
-                f"{', '.join(visible)}."
+                f"Still showing{why}: {', '.join(visible)}. Someone at the PC has to "
+                "close it (its close button, or ESC)."
             )
         if "PENDING|DiplomacyActionView" in lines:
             parts.append("Diplomacy session active — use respond_to_diplomacy.")
         if "PENDING|DiplomacyDealView" in lines:
             parts.append("Incoming trade deal pending — use get_pending_trades.")
         return " ".join(parts) if parts else "No popups to dismiss."
+
+    async def _close_with_escape(self, visible: list[str], menu_was_up: bool) -> tuple[list[str], list[str], str]:
+        """Press ESC in the game window until none of these popups show.
+
+        Returns (closed, still showing, what went wrong). One press closes
+        one popup, and a popup can have more queued behind it (three techs
+        in a turn), hence the loop. ESC with nothing left to close raises
+        the pause menu; that is put away with one more press.
+        """
+        closed: list[str] = []
+        presses = 0
+        for presses in range(1, _MAX_ESCAPES + 1):
+            try:
+                screen.press_key(screen.VK_ESCAPE)
+            except screen.ScreenError as e:
+                return closed, visible, str(e)
+            await asyncio.sleep(_ESCAPE_SETTLE_S)
+            lines = await self.conn.execute(_DISMISS_POPUP_LUA)
+            now = [l.split("|", 1)[1] for l in lines if l.startswith("VISIBLE|")]
+            closed += [n for n in visible if n not in now and n not in closed]
+            visible = now
+            if "MENU" in lines and not menu_was_up:
+                try:
+                    screen.press_key(screen.VK_ESCAPE)
+                except screen.ScreenError as e:
+                    return closed, visible, f"the pause menu is up and could not be closed: {e}"
+                await asyncio.sleep(_ESCAPE_SETTLE_S)
+                break
+            if not visible:
+                break
+        problem = "" if not visible else f"ESC pressed {presses} time{'' if presses == 1 else 's'} did not close it"
+        return closed, visible, problem
+
+    async def take_screenshot(
+        self, path: Path, x: int | None = None, y: int | None = None, zoom: float = 0.5, show_hud: bool = False
+    ) -> str:
+        """Save a picture of the game window to `path`, of the map around (x, y) when given.
+
+        Popups are dismissed first. Unless `show_hud`, the interface panels
+        (top bar, world tracker, minimap, notifications, action panel) are
+        hidden for the picture and put back after it; city banners, unit
+        flags, yield icons and map pins stay. Returns what the picture shows.
+        """
+        if (x is None) != (y is None):
+            raise ValueError("Give both x and y, or neither.")
+        zoom = min(1.0, max(0.0, float(zoom)))
+        popups = await self.dismiss_popup()
+        lines = await self.conn.execute(_camera_lua(x, y, zoom, hide_hud=not show_hud))
+        covering = [l.split("|", 1)[1] for l in lines if l.startswith("COVER|")]
+        try:
+            await asyncio.sleep(_CAMERA_SETTLE_S)
+            window = await asyncio.to_thread(screen.capture, path)
+        finally:
+            if not show_hud:
+                await self._restore_hud()
+        where = f"the map around ({x},{y})" if x is not None else "the game as the camera stood"
+        parts = [
+            f"Screenshot saved: {path}",
+            f"It shows {where} at zoom {zoom:g}, {window.width}x{window.height}, "
+            + ("with the interface panels." if show_hud else "interface panels hidden."),
+        ]
+        if popups != "No popups to dismiss.":
+            parts.append(f"Popups: {popups}")
+        if covering:
+            parts.append(f"Still covering the map in the picture: {', '.join(covering)}.")
+        return "\n".join(parts)
+
+    async def _restore_hud(self) -> None:
+        """Show the panels take_screenshot hid. Tried twice: a HUD left hidden looks like a broken game."""
+        for attempt in (1, 2):
+            try:
+                await self.conn.execute(_RESTORE_HUD_LUA)
+                return
+            except Exception:
+                log.error("could not restore the HUD after a screenshot (attempt %d)", attempt, exc_info=True)
+                await asyncio.sleep(1.0)
 
 
 # Popups the UI state can close from the outside (DequeuePopup + SetHide).
@@ -1361,15 +1448,18 @@ _CLOSABLE_POPUPS = (
     "WorldCongressPopup",
     "WorldCongressIntro",
 )
-# Popups that reference an engine event until their own Close() runs; hiding
-# them from another context leaves the engine waiting (PLEASE WAIT), so they
-# are reported, not touched.
+# Popups that must run their own Close(): some reference an engine event
+# until then, and hiding those from another context leaves the engine waiting
+# (PLEASE WAIT); others show the next one queued behind them. Their Lua
+# cannot be reached from the bridge's context, but each closes on ESC, so
+# dismiss_popup presses it in the game window (verified live 2026-11-24).
 _EVENT_POPUPS = (
     "TechCivicCompletedPopup",
     "NaturalWonderPopup",
     "NaturalDisasterPopup",
     "WonderBuiltPopup",
     "EraCompletePopup",
+    "EraReviewPopup",
     "HistoricMoments",
     "MomentPopup",
     "ProjectBuiltPopup",
@@ -1407,10 +1497,64 @@ def _build_dismiss_popup_lua() -> str:
         "UI.SetInterfaceMode(InterfaceModeTypes.SELECTION) "
         'print("DISMISSED|cinematic_camera") end'
     )
+    checks.append(
+        'do local c = ContextPtr:LookUpControl("/InGame/TopOptionsMenu") '
+        'if c and not c:IsHidden() then print("MENU") end end'
+    )
     return " ".join(checks) + f' print("{lq.SENTINEL}")'
 
 
 _DISMISS_POPUP_LUA = _build_dismiss_popup_lua()
+
+_MAX_ESCAPES = 8  # ESC presses per dismiss_popup call
+_ESCAPE_SETTLE_S = 0.6  # for the popup to close and the next one to show
+_CAMERA_SETTLE_S = 1.0  # for the camera to arrive and the map to draw before the picture
+
+# The containers InGame.lua's own BulkHide hides, minus the map's banners and
+# flags (WorldViewControls). What each was is kept in the Lua state, so the
+# restore puts back exactly that, and a second hide never forgets it.
+_HUD_GROUPS = ("HUD", "PartialScreens", "TopLevelHUD")
+_HIDE_HUD_LUA = (
+    "MCP_HUD = MCP_HUD or {} "
+    "for _, n in ipairs({" + ", ".join(f'"{n}"' for n in _HUD_GROUPS) + "}) do "
+    'local c = ContextPtr:LookUpControl("/InGame/" .. n) '
+    "if c and MCP_HUD[n] == nil then MCP_HUD[n] = c:IsHidden() c:SetHide(true) end "
+    "end "
+)
+_RESTORE_HUD_LUA = (
+    "for n, was in pairs(MCP_HUD or {}) do "
+    'local c = ContextPtr:LookUpControl("/InGame/" .. n) '
+    "if c then c:SetHide(was) end "
+    "end "
+    "MCP_HUD = nil "
+    f'print("RESTORED") print("{lq.SENTINEL}")'
+)
+# Full-screen things a picture would show instead of the map.
+_COVERS = ("PlayerChange", "TopOptionsMenu", "DiplomacyActionView", "DiplomacyDealView", *_EVENT_POPUPS)
+
+
+def _camera_lua(x: int | None, y: int | None, zoom: float, hide_hud: bool) -> str:
+    """Point the camera for a screenshot: centre on a plot, set the zoom (0 closest, 1 farthest), hide the HUD."""
+    parts = []
+    if x is not None and y is not None:
+        # Map.GetPlot answers for coordinates past the edge too (seen live), so check the grid itself.
+        parts.append(
+            f"local x, y = {int(x)}, {int(y)} "
+            "local w, h = Map.GetGridSize() "
+            "if x < 0 or y < 0 or x >= w or y >= h then "
+            'print("ERR:NO_PLOT|(" .. x .. "," .. y .. ") is off the map, which is " .. w .. "x" .. h .. " tiles") '
+            f'print("{lq.SENTINEL}") return end '
+            "UI.LookAtPlot(x, y) "
+        )
+    parts.append(f"UI.SetMapZoom({zoom:.3f}, 0.0, 0.0) ")
+    if hide_hud:
+        parts.append(_HIDE_HUD_LUA)
+    parts += [
+        f'do local c = ContextPtr:LookUpControl("/InGame/{n}") '
+        f'if c and not c:IsHidden() then print("COVER|{n}") end end '
+        for n in _COVERS
+    ]
+    return "".join(parts) + f'print("CAMERA") print("{lq.SENTINEL}")'
 
 
 def _action_result(lines: list[str]) -> str:

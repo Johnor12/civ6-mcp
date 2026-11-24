@@ -178,9 +178,27 @@ destination using the game's own pathfinder.
 - **City capture** — `city_action(city_id, "keep" | "raze" | "liberate_founder" | "liberate_previous")`.
 - **Diplomacy** — `get_pending_diplomacy` → `respond_to_diplomacy`; `get_pending_trades` → `respond_to_trade`.
 
-If a popup seems to block the game, `dismiss_popup`. Popups with their own
-close button (natural wonder, wonder built, era complete) are only reported:
-tell the operator to press ESC in the game.
+If a popup seems to block the game, `dismiss_popup`: it closes what it can
+directly and presses ESC in the game window for the popups with their own
+close button (tech or civic completed, era complete, era review, natural
+wonder, wonder built). Only when its reply says one is still showing, tell
+the operator to press ESC in the game.
+
+## Screenshots
+
+`take_screenshot(x, y, zoom, show_hud)` saves a picture of the game window
+centred on a tile: it dismisses popups, moves the camera, hides the
+interface panels for the moment of the picture (unless `show_hud`) and
+replies with the file. Zoom 0.0 is closest (about 9 tiles across), 1.0
+farthest (about 30). The stand-in must be armed, since the turn-change
+screen covers the whole map, and pictures must be taken before `end_turn`.
+Read the file to check it before using it.
+
+`send_screenshot(file, caption)` posts it in the Slack DM of the player the
+run reports to. It only works in a run the Slack bot started; elsewhere it
+says so and names the file. A player who asks for a picture has not asked
+for their turn to be played: take the seat, send the picture, give no
+orders and leave the turn unended.
 
 ## Diplomacy and trade with human players
 

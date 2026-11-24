@@ -129,6 +129,13 @@ only decides who may do what; what a message means is up to Claude.
   progress and Claude's report by DM; you only hear whose turn it is
   afterwards. A button left over from a turn that has since ended does
   nothing.
+- **Screenshots.** On your own turn, DM the bot what you want to see
+  ("a screenshot of my capital", "show me the border with Rome"). Claude
+  takes your seat (presses Start Turn), closes any popups, moves the
+  camera there, takes a picture of the game window and posts it in the
+  DM. It gives no orders and leaves the turn unended, so you can follow
+  up with a note to play by. The picture is the game's own rendering of
+  your seat, fog of war included.
 - **A turn being played can't be taken over.** Once Cameron has pressed
   Start Turn (the taken log has it), nobody gets the button, the admin
   included: the reply says Cameron is playing it. A button handed out
@@ -156,7 +163,7 @@ uv run scripts/start.py   # the turn logger, the announcer, the turn report, the
 
 The Slack app needs Socket Mode on, an app-level token with
 `connections:write`, the bot scopes `app_mentions:read`, `im:history`,
-`im:write`, `chat:write` and `channels:history`, the bot events
+`im:write`, `chat:write`, `files:write` (screenshots) and `channels:history`, the bot events
 `app_mention`, `message.im` and `app_home_opened`, Interactivity turned on
 (for the buttons; Socket Mode needs no request URL), the Messages and Home
 tabs enabled under App Home (DMs, and a status page with whose turn it is
@@ -303,10 +310,16 @@ lets the turn go.
   context that exists only in the Windows build, and the game folder
   lookup uses the Windows shell. `CIV_MCP_MODS_DIR` and `CIV_MCP_LUA_LOG`
   override the mod and log locations.
-- Popups that reference an engine event until their own close button runs
-  (natural wonder, wonder built, era complete, tutorial advisor) cannot be
-  closed from the bridge's UI context; `dismiss_popup` reports them and
-  someone presses ESC in the game.
+- Popups that must run their own close button (tech or civic completed,
+  natural wonder, wonder built, era complete, era review) cannot be closed
+  from the bridge's UI context, so `dismiss_popup` sends the game window
+  an ESC key press for each (`civ_mcp/screen.py`). Verified on the
+  Historic Moments screen and the pause menu; the others close on ESC in
+  the game's Lua the same way but have not come up in a test yet. A popup
+  that survives is reported, and then someone presses ESC at the PC.
+- Screenshots are taken from outside the game (`PrintWindow` on its
+  window), so the PC must be unlocked with the game window not minimized;
+  other windows on top of it do not matter.
 - A turn in which the stand-in is the last human of the round (the AI civs
   and city-states run before the next turn-change screen; `end_turn` waits
   up to four minutes) and a World Congress session have not been exercised

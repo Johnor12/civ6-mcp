@@ -661,7 +661,7 @@ async def _interrupted_text(gs: GameState, st: hotseat.HotseatStatus) -> str:
         "happened while automated units moved (a tribal village, a natural wonder, "
         "a first contact or an attack). The turn-change screen came up again and "
         "was dismissed; it is still this player's turn. Check the notifications "
-        "below (a natural-wonder or first-meet popup needs ESC in the game), give "
+        "below (dismiss_popup closes a natural-wonder or first-meet popup), give "
         "any new orders, then call end_turn again; the diary entry is kept.\n\n"
         + notes
     )

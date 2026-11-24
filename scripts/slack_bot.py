@@ -108,10 +108,17 @@ begin_standin_turn presses Start Turn in the game for them, so call it only \
 when they want the turn played or ask about something only their game shows; \
 if you take the seat without playing the turn, leave it unended and say so.
 
+If they ask to see something (a screenshot of a city, a border, a unit, any \
+place), take the seat, find the tile in the briefing, then take_screenshot \
+there and send_screenshot: the picture is posted in this DM. Look at the file \
+with Read first and retake it (other tile, zoom, show_hud) if it does not show \
+what they asked for. Asking for a picture is not asking for the turn to be \
+played: give no orders, leave the turn unended and say so.
+
 The message speaks for {leader}'s turn only: act for no other player, read no \
 other player's diary, and load a save only to open this turn if the game is \
 at the main menu. If something stops you (another player's turn-change \
-screen, the game not running, a popup that needs ESC in the game), stop and \
+screen, the game not running, a popup dismiss_popup cannot close), stop and \
 say what someone at the PC has to do.
 
 Your final message is sent to {name} in Slack as-is. {slack_format}

@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
-from civ_mcp import turn_watch  # noqa: E402
+from civ_mcp import screen, turn_watch  # noqa: E402
 
 
 class GameLog:
@@ -59,3 +59,47 @@ def game_log(tmp_path, monkeypatch) -> GameLog:
     log = GameLog(tmp_path / "Logs" / "Lua.log")
     monkeypatch.setattr(turn_watch, "_default", turn_watch.TurnWatch(log.path))
     return log
+
+
+class FakeGameWindow:
+    """Stands in for the game window: records the keys pressed and the pictures taken, and can fail like no game."""
+
+    def __init__(self) -> None:
+        self.keys: list[int] = []
+        self.captures: list[Path] = []
+        self.error: Exception | None = None
+
+    def find(self) -> screen.GameWindow:
+        if self.error:
+            raise self.error
+        return screen.GameWindow(hwnd=1, width=3840, height=2160)
+
+    def press_key(self, vk: int = screen.VK_ESCAPE, window=None) -> None:
+        self.find()
+        self.keys.append(vk)
+
+    def capture(self, path: Path, window=None, quality: int = screen.JPEG_QUALITY) -> screen.GameWindow:
+        found = self.find()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"jpg")
+        self.captures.append(path)
+        return found
+
+
+@pytest.fixture(autouse=True)
+def game_window(monkeypatch) -> FakeGameWindow:
+    """No test presses a key in, or takes a picture of, the Civ 6 that may be running on this PC."""
+    window = FakeGameWindow()
+    monkeypatch.setattr(screen, "find_game_window", window.find)
+    monkeypatch.setattr(screen, "press_key", window.press_key)
+    monkeypatch.setattr(screen, "capture", window.capture)
+    return window
+
+
+@pytest.fixture(autouse=True)
+def screenshots(tmp_path, monkeypatch) -> Path:
+    """Every test gets a screenshots folder of its own."""
+    folder = tmp_path / "screenshots"
+    folder.mkdir()
+    monkeypatch.setattr(screen, "screenshots_dir", lambda: folder)
+    return folder

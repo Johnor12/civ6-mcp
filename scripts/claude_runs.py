@@ -4,8 +4,11 @@ Imported by scripts/slack_bot.py and scripts/out_of_office.py; standard
 library only. A run is `claude -p` in the repo root with only the repo's
 civ6 MCP server and tight tool permissions. Its progress goes to a Slack
 message edited in place and to the console; Claude's final message is the
-reply. RunLock keeps runs one at a time across both processes, since they
-drive the same game.
+reply. A screenshot Claude sends with the send_screenshot tool is uploaded
+to the same conversation as it happens: the tool only names the file, the
+upload is done here, so the Slack token and the choice of recipient stay
+out of Claude's hands. RunLock keeps runs one at a time across both
+processes, since they drive the same game.
 """
 
 from __future__ import annotations
@@ -16,6 +19,7 @@ import msvcrt
 import os
 import re
 import subprocess
+import sys
 import threading
 import time
 from collections import deque
@@ -26,6 +30,8 @@ from pathlib import Path
 from players import Player
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT / "src"))
+from civ_mcp import screen  # noqa: E402
 
 log = logging.getLogger("claude_runs")
 
@@ -68,7 +74,7 @@ end_turn, with the note "{note}" for begin_standin_turn. Keep to the plan in \
 the diary and the map pins and play steadily: nothing {name} would want to \
 undo. Act for no other player, and load a save only to open this turn if the \
 game is at the main menu. If something stops you (another player's \
-turn-change screen, the game not running, a popup that needs ESC in the game), \
+turn-change screen, the game not running, a popup dismiss_popup cannot close), \
 stop and say what someone at the PC has to do.
 
 Your final message is sent to {name} in Slack as-is, telling them what \
@@ -78,6 +84,9 @@ happened to their turn. {slack_format}
 # A progress step is (kind, text). "action", "text" and "error" steps are
 # listed and logged; "now" only replaces the status line under the list.
 Report = Callable[[str, str], None]
+# Delivers a screenshot Claude sent (file, caption) to the run's conversation.
+SendFile = Callable[[Path, str], None]
+UPLOAD = "upload"  # a step Steps yields for run_claude alone: the file, a line break, the caption
 STEP_MARKERS = {"action": "▸", "text": "💬", "error": "⚠️"}
 
 CIV6 = "mcp__civ6__"
@@ -290,6 +299,13 @@ class Steps:
         line = self._action(tool, args, text)
         if block.get("is_error") or text.startswith("Error"):
             yield "error", f"{line}: {first_sentences(text, 1)}"
+        elif tool == "send_screenshot":
+            # Only the server's own answer names the file; what Claude asked for is not trusted.
+            if (path := screen.sent_screenshot(text)) is not None:
+                caption = " ".join(str(args.get("caption") or "").split())
+                yield UPLOAD, f"{path}\n{caption}"
+            else:
+                yield "error", f"{line}: {first_sentences(text, 1)}"
         else:
             yield "action", line
 
@@ -316,6 +332,11 @@ class Steps:
                 return f"{city}: buy {pretty(args.get('item_name'))}"
             case "skip_remaining_units":
                 return "Skipped the remaining units"
+            case "take_screenshot":
+                where = f"({args['x']},{args['y']})" if args.get("x") is not None else "the current view"
+                return f"Screenshot of {where}"
+            case "send_screenshot":
+                return "Send the screenshot"
             case _:
                 return tool_call(tool, args)
 
@@ -369,8 +390,16 @@ def tool_result_text(content) -> str:
     return text
 
 
-def run_claude(prompt: str, claude: str, report: Report) -> str:
-    """Run one headless Claude Code session in the repo root, reporting each step; return the Slack reply."""
+def run_claude(prompt: str, claude: str, report: Report, send_file: SendFile | None = None) -> str:
+    """Run one headless Claude Code session in the repo root, reporting each step; return the Slack reply.
+
+    `send_file` delivers the screenshots Claude sends during the run;
+    without it the send_screenshot tool tells Claude there is nowhere to
+    send them. Screenshots left by an earlier run, which may have been
+    another player's, are deleted first.
+    """
+    screen.clear_screenshots()
+    screen.set_delivery(send_file is not None)
     cmd = [
         claude, "-p", "--output-format", "stream-json", "--verbose",
         # Only the repo's civ6 server, not the account's claude.ai connectors.
@@ -411,10 +440,20 @@ def run_claude(prompt: str, claude: str, report: Report) -> str:
                 result = event
                 continue
             for kind, text in steps.feed(event):
-                report(kind, text)
+                if kind != UPLOAD:
+                    report(kind, text)
+                    continue
+                path, _, caption = text.partition("\n")
+                try:
+                    send_file(Path(path), caption)
+                    report("action", f"Sent a screenshot{f': {caption}' if caption else ''}")
+                except Exception as exc:  # no sender, Slack down, file gone: Claude was told it went
+                    log.exception("screenshot %s was not sent", path)
+                    report("error", f"The screenshot was not sent: {exc}")
         proc.wait()
     finally:
         watchdog.cancel()
+        screen.set_delivery(False)
     drain.join(timeout=5)
     elapsed = time.monotonic() - started
     log.info("claude exited %s after %s", proc.returncode, minutes(elapsed))
@@ -447,6 +486,19 @@ def open_dm(client, player: Player | None) -> str | None:
         return None
 
 
+def upload_screenshot(client, channel: str, thread_ts: str | None, path: Path, caption: str) -> None:
+    """Post a screenshot in a Slack conversation. Needs the files:write scope."""
+    client.files_upload_v2(
+        channel=channel,
+        thread_ts=thread_ts,
+        file=str(path),
+        filename=path.name,
+        title=caption or "Civ 6 screenshot",
+        initial_comment=caption or None,
+    )
+    log.info("uploaded %s to %s", path.name, channel)
+
+
 def log_step(kind: str, text: str) -> None:
     if kind != "now":
         log.info("  %s %s", STEP_MARKERS[kind], " ".join(text.split()))
@@ -458,7 +510,10 @@ def run_with_progress(client, channel: str, thread_ts: str | None, prompt: str, 
     progress = Progress(client, status["channel"], status["ts"])
     state = "Failed"
     try:
-        result = run_claude(prompt, claude, progress.add)
+        result = run_claude(
+            prompt, claude, progress.add,
+            send_file=lambda path, caption: upload_screenshot(client, status["channel"], thread_ts, path, caption),
+        )
         state = "Finished"
     finally:
         progress.finish(state)

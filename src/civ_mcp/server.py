@@ -21,6 +21,7 @@ from mcp.server.fastmcp import Context, FastMCP
 from civ_mcp import diary as _diary
 from civ_mcp import hotseat as _hotseat
 from civ_mcp import narrate as nr
+from civ_mcp import screen as _screen
 from civ_mcp import standin as _standin
 from civ_mcp.bridge import BridgeConnection, LuaError
 from civ_mcp.end_turn import execute_hotseat_end_turn
@@ -1767,15 +1768,87 @@ async def set_city_focus(ctx: Context, city_id: int, focus: str) -> str:
 
 @mcp.tool()
 async def dismiss_popup(ctx: Context) -> str:
-    """Dismiss a blocking popup in the game UI, or report one that needs the keyboard.
+    """Dismiss the popups showing in the game UI.
 
-    Call this if a popup (historic moment, boost, world congress intro) seems
-    to be blocking interaction. Popups with their own close button (natural
-    wonder, wonder built, era complete, tutorial advisor) are reported; press
-    ESC in the game for those.
+    Call this if a popup seems to be blocking interaction. Boost and
+    world-congress popups are closed directly; the ones with their own
+    close button (tech or civic completed, era complete, era review,
+    historic moments, natural wonder, wonder built) get an ESC key press
+    in the game window, one per popup. The reply names anything that is
+    still showing: only then does someone at the PC have to close it.
+    A diplomacy screen is left alone (respond_to_diplomacy).
     """
     gs = _game(ctx)
     return await _logged(ctx, "dismiss_popup", {}, gs.dismiss_popup)
+
+
+@mcp.tool()
+async def take_screenshot(
+    ctx: Context,
+    x: Optional[int] = None,
+    y: Optional[int] = None,
+    zoom: float = 0.5,
+    show_hud: bool = False,
+) -> str:
+    """Take a picture of the game as this player sees it, centred on a tile.
+
+    Moves the camera to (x, y), dismisses popups, hides the interface
+    panels and saves a JPEG of the game window; the panels come back
+    right after. The game draws the fog of war itself, so the picture
+    shows only what this player has revealed. The reply gives the file:
+    look at it with Read to check it shows what was asked for, then pass
+    it to send_screenshot. Take pictures before end_turn: afterwards the
+    next player's turn-change screen covers the map.
+
+    Args:
+        x, y: Tile to centre on (from the briefing: a city, a unit, a pin).
+              Leave both out to keep the camera where it is.
+        zoom: 0.0 is closest (about 9 tiles across), 0.5 about 18, 1.0
+              farthest (about 30 tiles across).
+        show_hud: Keep the interface in the picture (top bar with yields,
+                  research, unit list, minimap, notifications).
+    """
+    s = _session(ctx)
+
+    async def _run() -> str:
+        cfg = _standin.active_config()
+        who = (cfg.leader if cfg else "player").removeprefix("LEADER_").lower()
+        turn = cfg.started_turn if cfg and cfg.started_turn is not None else 0
+        name = f"{who}_turn{turn}_{datetime.now():%H%M%S}.jpg"
+        try:
+            return await s.game.take_screenshot(_screen.screenshots_dir() / name, x, y, zoom, show_hud)
+        except _screen.ScreenError as e:
+            return f"Error: {e}"
+
+    return await _logged(
+        ctx, "take_screenshot", {"x": x, "y": y, "zoom": zoom, "show_hud": show_hud}, _run
+    )
+
+
+@mcp.tool()
+async def send_screenshot(ctx: Context, file: str, caption: str = "") -> str:
+    """Send a picture from take_screenshot to the player, in the Slack DM this run reports to.
+
+    Only a run started from Slack has a DM to send to; anywhere else the
+    reply says nothing was sent and where the file is. Works after
+    end_turn too, for a picture taken before it.
+
+    Args:
+        file: The file take_screenshot reported (its name is enough).
+        caption: One line shown with the picture: what it shows and where.
+    """
+    path = _screen.screenshot_named(file)
+    if path is None:
+        return f"Error: no screenshot named '{file}' in {_screen.screenshots_dir()}. Call take_screenshot first."
+    if not _screen.delivery_on():
+        return (
+            "Not sent: this session was not started from Slack, so there is no DM to "
+            f"send it to. The file is {path}."
+        )
+    log.info("send_screenshot(%s): %s", path.name, caption)
+    return f"{_screen.SENT_PREFIX}{path}\nThe Slack bot uploads it to the player's DM now" + (
+        f", with the caption: {caption}" if caption else "."
+    )
 
 
 def main() -> None:
