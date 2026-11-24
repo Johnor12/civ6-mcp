@@ -496,6 +496,40 @@ def test_next_post_is_the_coming_weekday_morning():
     assert turn_report.next_post(datetime(2026, 11, 2, 8, 30)) == monday
 
 
+@pytest.fixture
+def holidays(monkeypatch):
+    """Thursday 29 and Friday 30 Oct 2026 are holidays."""
+    monkeypatch.setattr(turn_logger, "HOLIDAYS", frozenset({date(2026, 10, 29), date(2026, 10, 30)}))
+
+
+def test_a_holiday_counts_for_the_workday_before(holidays):
+    assert turn_times.workday_of(datetime(2026, 10, 29, 12)) == date(2026, 10, 28)  # Thursday off: Wednesday
+    assert turn_times.workday_of(datetime(2026, 10, 31, 12)) == date(2026, 10, 28)  # the Saturday after
+    assert turn_times.workday_of(datetime(2026, 11, 2, 8, 30)) == date(2026, 10, 28)
+    assert turn_times.workday_of(datetime(2026, 11, 2, 9)) == date(2026, 11, 2)
+    assert turn_report.previous_workday(date(2026, 11, 2)) == date(2026, 10, 28)
+    assert turn_report.previous_workday(date(2026, 10, 30)) == date(2026, 10, 28)
+
+
+def test_no_report_on_a_holiday(holidays):
+    monday = datetime(2026, 11, 2, 9, 0)
+    assert turn_report.next_post(datetime(2026, 10, 28, 8)) == datetime(2026, 10, 28, 9)
+    assert turn_report.next_post(datetime(2026, 10, 28, 9)) == monday  # Wednesday's report is out: next on Monday
+    assert turn_report.next_post(datetime(2026, 10, 29, 8)) == monday
+    assert turn_report.next_post(datetime(2026, 10, 30, 10)) == monday
+
+
+def test_the_report_after_a_holiday_covers_the_last_workday(game, holidays):
+    _week(game)
+    seq, _ = game.compute()
+    data = report(seq, date(2026, 11, 2))  # Monday, after Thursday and Friday off
+    info, = data["info"]
+    assert (info["day"], info["label"]) == ("2026-10-28", "Wednesday 28 Oct")
+    assert info["day_end"] == "2026-10-28T17:00:00"
+    assert summary(data, "yesterday")["turns"] == 3
+    assert [(r["day"], r["turns"]) for r in data["days"]] == [("2026-10-27", 1), ("2026-10-28", 3)]  # no holiday rows
+
+
 DATA = {"info": [{"headline": "Yesterday (Tue 27 Oct): 2 turns.", "generated": "2026-10-28T09:00:00"}]}
 LINK = f"<{turn_report.ARTIFACT_URL}|Turn times: yesterday and the whole game>"
 

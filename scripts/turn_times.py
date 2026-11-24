@@ -373,17 +373,17 @@ def finished(seq: list[PlayerTurn]) -> list[tuple[PlayerTurn, datetime]]:
 
 
 def workday_of(when: datetime) -> date:
-    """The workday a moment counts towards: the last weekday whose workday had begun by then.
+    """The workday a moment counts towards: the last working day whose workday had begun by then.
 
     Overnight, until the next workday begins (turn_logger.WORKDAY_START_HOUR),
-    and over the weekend, it is still the workday before: a turn that ends
-    at 8:46 on Thursday is Wednesday's, one that ends on Saturday or before
-    9:00 on Monday is Friday's.
+    and over the weekend or a holiday (turn_logger.is_day_off), it is still
+    the workday before: a turn that ends at 8:46 on Thursday is Wednesday's,
+    one that ends on Saturday or before 9:00 on Monday is Friday's.
     """
     day = when.date()
     if when.hour < turn_logger.WORKDAY_START_HOUR:
         day -= timedelta(days=1)
-    while day.weekday() >= 5:
+    while turn_logger.is_day_off(day):
         day -= timedelta(days=1)
     return day
 

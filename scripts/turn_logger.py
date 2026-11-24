@@ -136,6 +136,14 @@ WORKDAY = (
     + f", Mon–Fri (Fri until {FRIDAY_END_HOUR}:00)"
 )
 TURN_LIMIT_S = 3600  # workday time after which another player may have a turn played
+# Days off beside the weekend, local dates. They are treated like a weekend
+# day everywhere (is_day_off): no workday time, so turn clocks stand still and
+# no reminder or limit comes due; no turn report that morning; a turn that
+# ends on one counts towards the workday before (turn_times.workday_of).
+HOLIDAYS = frozenset({
+    date(2026, 11, 26),  # Thanksgiving
+    date(2026, 11, 27),  # the day after
+})
 
 
 @dataclass(frozen=True)
@@ -725,9 +733,14 @@ def duration_of_current_turn(
     return first, workday_seconds(first.at, now or datetime.now())
 
 
+def is_day_off(day: date) -> bool:
+    """Whether `day` has no workday at all: a Saturday, a Sunday or one of HOLIDAYS."""
+    return day.weekday() >= 5 or day in HOLIDAYS
+
+
 def _workday_spans(day: date) -> list[tuple[datetime, datetime]]:
-    """`day`'s stretches of workday time (WORKDAY_SPANS, FRIDAY_SPANS on Friday), in order; none at the weekend."""
-    if day.weekday() >= 5:
+    """`day`'s stretches of workday time (WORKDAY_SPANS, FRIDAY_SPANS on Friday), in order; none on a day off."""
+    if is_day_off(day):
         return []
     spans = FRIDAY_SPANS if day.weekday() == 4 else WORKDAY_SPANS
     return [(datetime.combine(day, a), datetime.combine(day, b)) for a, b in spans]

@@ -232,6 +232,12 @@ and what the viewer can do about it), and an invite to
   splits what remains evenly. Run it on its own for the table, `--turns`
   for every turn and what its timing rests on. Nothing is saved; the log
   is the history.
+- **Holidays.** The dates in `HOLIDAYS` in `scripts/turn_logger.py` count
+  like weekend days: no workday time (turn clocks stand still, so no
+  reminder and no Play button comes due), no turn report that morning, and
+  a turn that ends on one counts for the workday before. Add a date there
+  and restart `start.py`; leave past ones in, since the turn times of
+  their weeks are worked out from the list.
 - **Live progress.** The bot's first reply is edited every few seconds with
   the elapsed time, one line per game action ("Warrior: move → (37,40)",
   "Research: Pottery", the end-turn result), Claude's narration and failed

@@ -149,6 +149,23 @@ class TestWorkdayHours:
         assert not turn_logger.is_workday(_at(0, 12, 44))
         assert turn_logger.is_workday(_at(0, 12, 45))
 
+    def test_holidays_count_like_the_weekend(self, monkeypatch):
+        monkeypatch.setattr(turn_logger, "HOLIDAYS", frozenset({_at(3, 0).date(), _at(4, 0).date()}))  # Thursday, Friday
+        assert turn_logger.is_day_off(_at(3, 0).date()) and turn_logger.is_day_off(_at(5, 0).date())
+        assert not turn_logger.is_day_off(_at(2, 0).date())
+        assert not turn_logger.is_workday(_at(3, 10)) and not turn_logger.is_workday(_at(4, 10))
+        assert turn_logger.is_workday(_at(2, 10)) and turn_logger.is_workday(_at(7, 10))
+        # Wednesday 16:30 to Monday 9:45: half an hour, then three quarters.
+        assert turn_logger.workday_seconds(_at(2, 16, 30), _at(7, 9, 45)) == 75 * 60
+        assert turn_logger.workday_seconds(_at(3, 8), _at(4, 20)) == 0
+        assert turn_logger.workday_deadline(_at(2, 16, 30), 3600) == _at(7, 9, 30)
+        assert turn_logger.workday_deadline(_at(3, 10), 900) == _at(7, 9, 15)  # a turn that begins on the holiday
+
+    def test_thanksgiving_2026_is_off(self):
+        wednesday, monday = datetime(2026, 11, 25), datetime(2026, 11, 30)
+        assert turn_logger.workday_seconds(wednesday.replace(hour=16), monday.replace(hour=10)) == 2 * 3600
+        assert turn_logger.workday_deadline(wednesday.replace(hour=16, minute=30), 3600) == monday.replace(hour=9, minute=30)
+
     def test_workday_text_names_the_grace_period(self):
         assert turn_logger.WORKDAY == "9:00–12:15, 12:45–17:00, Mon–Fri (Fri until 16:00)"
 

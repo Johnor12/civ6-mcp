@@ -27,7 +27,8 @@ fails the post still goes out and says the page is not up to date.
 
 A turn counts towards the workday it ended in, and a workday lasts until
 the next one begins at 9:00 (turn_times.workday_of), so a turn finished
-overnight or over the weekend is the previous workday's. The report covers
+overnight, over the weekend or on a holiday (turn_logger.HOLIDAYS) is the
+previous workday's, and a holiday gets no report of its own. The report covers
 every turn up to the previous workday ("yesterday"; Friday on a Monday);
 turns of a workday still under way are left for its own report. Turn time
 is wait plus play (turn_times.overall_minutes): the workday time
@@ -70,7 +71,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 log = logging.getLogger("turn_report")
 
-POST_AT = clock(9, 0)  # local time, Monday to Friday: the moment the previous workday closes (turn_times.workday_of)
+POST_AT = clock(9, 0)  # local time, Monday to Friday less holidays: the moment the previous workday closes (turn_times.workday_of)
 SLEEP_S = 300  # how long to sleep at a stretch while waiting for POST_AT
 
 ARTIFACT_URL = "https://claude.ai/artifact/R7iddDEahbRBdTJ3KrGmTD"
@@ -93,9 +94,9 @@ BACKGROUNDED = re.compile(r"backgrounded · (\w+)")
 
 
 def previous_workday(day: date) -> date:
-    """The weekday before `day`: Friday for a Monday (or a weekend day)."""
+    """The working day before `day`: Friday for a Monday (or a weekend day), skipping holidays (turn_logger.is_day_off)."""
     day -= timedelta(days=1)
-    while day.weekday() >= 5:
+    while turn_logger.is_day_off(day):
         day -= timedelta(days=1)
     return day
 
@@ -125,10 +126,10 @@ def _by_day(done: Done) -> dict[date, Done]:
     return dict(sorted(days.items()))
 
 
-def _weekdays(first: date, last: date) -> list[date]:
+def _workdays(first: date, last: date) -> list[date]:
     out, day = [], first
     while day <= last:
-        if day.weekday() < 5:
+        if not turn_logger.is_day_off(day):
             out.append(day)
         day += timedelta(days=1)
     return out
@@ -261,7 +262,7 @@ def report_data(
     - summary: a row per scope (_summary). The "all" row adds the days with
       a turn, the turns per such day, and the most and fewest turns on one.
     - records: the extremes of each scope (_records).
-    - days: a row per weekday from the first to the reported one, with its
+    - days: a row per working day from the first to the reported one, with its
       turns (0 for a day without one) and average turn and play time.
     - players: a row per scope and player (_players).
     - player_days: a row per day and player with a turn that day.
@@ -292,7 +293,7 @@ def report_data(
     }
 
     days, player_days = [], []
-    for d in _weekdays(min(by_day), day):
+    for d in _workdays(min(by_day), day):
         turns = by_day.get(d, [])
         own = turn_times.own_takes(turns)
         days.append({
@@ -474,11 +475,11 @@ def post(client) -> bool:
 
 
 def next_post(now: datetime) -> datetime:
-    """The next POST_AT after `now` that falls on a weekday."""
+    """The next POST_AT after `now` that falls on a working day (not a weekend day or a holiday)."""
     due = datetime.combine(now.date(), POST_AT)
     if due <= now:
         due += timedelta(days=1)
-    while due.weekday() >= 5:
+    while turn_logger.is_day_off(due.date()):
         due += timedelta(days=1)
     return due
 
