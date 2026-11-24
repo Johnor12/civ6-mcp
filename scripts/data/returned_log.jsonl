@@ -52,3 +52,15 @@
 {"at": "2026-11-20T13:53:47-05:00", "turn": 52, "leader": "LEADER_VICTORIA", "player": "Jake DuRegger", "event": "resumed", "by": "player"}
 {"at": "2026-11-20T15:25:20-05:00", "turn": 52, "leader": "LEADER_AMANITORE", "player": "Hunter", "event": "returned", "by": "player"}
 {"at": "2026-11-20T15:25:21-05:00", "turn": 52, "leader": "LEADER_AMANITORE", "player": "Hunter", "event": "resumed", "by": "player"}
+{"at": "2026-11-23T10:30:16-05:00", "turn": 53, "leader": "LEADER_JFD_STANISLAW", "player": "Mike", "event": "returned", "by": "player"}
+{"at": "2026-11-23T10:30:18-05:00", "turn": 53, "leader": "LEADER_JFD_STANISLAW", "player": "Mike", "event": "resumed", "by": "player"}
+{"at": "2026-11-23T11:39:59-05:00", "turn": 54, "leader": "LEADER_CLEOPATRA", "player": "Aaron", "event": "returned", "by": "player"}
+{"at": "2026-11-23T11:40:01-05:00", "turn": 54, "leader": "LEADER_CLEOPATRA", "player": "Aaron", "event": "resumed", "by": "player"}
+{"at": "2026-11-23T14:18:08-05:00", "turn": 54, "leader": "LEADER_JULIUS_CAESAR", "player": "Cameron", "event": "returned", "by": "player"}
+{"at": "2026-11-23T14:18:11-05:00", "turn": 54, "leader": "LEADER_JULIUS_CAESAR", "player": "Cameron", "event": "resumed", "by": "player"}
+{"at": "2026-11-24T09:05:17-05:00", "turn": 55, "leader": "LEADER_JULIUS_CAESAR", "player": "Cameron", "event": "returned", "by": "player"}
+{"at": "2026-11-24T09:05:19-05:00", "turn": 55, "leader": "LEADER_JULIUS_CAESAR", "player": "Cameron", "event": "resumed", "by": "player"}
+{"at": "2026-11-24T09:42:35-05:00", "turn": 55, "leader": "LEADER_GITARJA", "player": "Heldi", "event": "returned", "by": "player"}
+{"at": "2026-11-24T09:42:38-05:00", "turn": 55, "leader": "LEADER_GITARJA", "player": "Heldi", "event": "resumed", "by": "player"}
+{"at": "2026-11-24T10:25:46-05:00", "turn": 55, "leader": "LEADER_AMANITORE", "player": "Hunter", "event": "returned", "by": "player"}
+{"at": "2026-11-24T10:25:48-05:00", "turn": 55, "leader": "LEADER_AMANITORE", "player": "Hunter", "event": "resumed", "by": "player"}
