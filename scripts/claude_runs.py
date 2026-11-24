@@ -9,6 +9,11 @@ to the same conversation as it happens: the tool only names the file, the
 upload is done here, so the Slack token and the choice of recipient stay
 out of Claude's hands. RunLock keeps runs one at a time across both
 processes, since they drive the same game.
+
+A run can resume the session of an earlier one (`claude -p --resume`), so
+the messages a player sends during one turn are one conversation: the bot
+keeps that turn's session id with remember_turn_session and asks for it
+with turn_session.
 """
 
 from __future__ import annotations
@@ -38,6 +43,9 @@ log = logging.getLogger("claude_runs")
 TURN_TIMEOUT_S = 90 * 60
 SLACK_MAX_CHARS = 3500
 RUN_LOCK_PATH = REPO_ROOT / "scripts" / "data" / "claude_run.lock"
+# The session the player of the current turn is talking to: one turn's key and
+# session id, replaced when the next turn's player writes.
+TURN_SESSION_PATH = REPO_ROOT / "scripts" / "data" / "turn_session.json"
 
 # What the headless run may do without asking: every civ6 game tool, and the
 # BBG lookup CLAUDE.md describes (curl the leaders page into the scratchpad,
@@ -103,6 +111,31 @@ TYPE_PREFIX = re.compile(
 class Run:
     label: str  # what the run is, for the busy reply: "a run for <@U123>"
     started: float  # time.time()
+
+
+@dataclass
+class Outcome:
+    reply: str  # what the run has to say, for Slack
+    session: str | None  # the Claude Code session it ran in, to resume; None when none began
+
+
+class SessionLost(Exception):
+    """The session a run was to resume is gone (Claude Code deletes old ones); nothing ran."""
+
+
+def turn_session(key: tuple[int, str, str]) -> str | None:
+    """The session the player of the turn `key` has been talking to, or None before their first message."""
+    try:
+        kept = json.loads(TURN_SESSION_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return kept.get("session") if kept.get("key") == list(key) else None
+
+
+def remember_turn_session(key: tuple[int, str, str], session: str) -> None:
+    """Keep the session for the later messages of the turn `key`; the one kept for an earlier turn is dropped."""
+    TURN_SESSION_PATH.parent.mkdir(parents=True, exist_ok=True)
+    TURN_SESSION_PATH.write_text(json.dumps({"key": list(key), "session": session}), encoding="utf-8")
 
 
 class RunLock:
@@ -390,8 +423,15 @@ def tool_result_text(content) -> str:
     return text
 
 
-def run_claude(prompt: str, claude: str, report: Report, send_file: SendFile | None = None) -> str:
-    """Run one headless Claude Code session in the repo root, reporting each step; return the Slack reply.
+def run_claude(
+    prompt: str, claude: str, report: Report, send_file: SendFile | None = None, resume: str | None = None
+) -> Outcome:
+    """Run headless Claude Code in the repo root, reporting each step; return the Slack reply and the session.
+
+    `resume` is the session of an earlier run to carry on with: the prompt
+    is its next message, and Claude still has everything said and read
+    before. SessionLost when that session no longer exists. Without it the
+    run is a new session.
 
     `send_file` delivers the screenshots Claude sends during the run;
     without it the send_screenshot tool tells Claude there is nowhere to
@@ -407,6 +447,8 @@ def run_claude(prompt: str, claude: str, report: Report, send_file: SendFile | N
         "--allowedTools", *ALLOWED_TOOLS,
         "--disallowedTools", *DISALLOWED_TOOLS,
     ]
+    if resume:
+        cmd += ["--resume", resume]
     env = {k: v for k, v in os.environ.items() if k not in PARENT_SESSION_VARS}
     started = time.monotonic()
     proc = subprocess.Popen(
@@ -428,6 +470,7 @@ def run_claude(prompt: str, claude: str, report: Report, send_file: SendFile | N
     watchdog.start()
     steps = Steps()
     result: dict = {}
+    session: str | None = None  # known from the first event, so a run that is killed can still be resumed
     try:
         proc.stdin.write(prompt)
         proc.stdin.close()
@@ -439,6 +482,7 @@ def run_claude(prompt: str, claude: str, report: Report, send_file: SendFile | N
             if event.get("type") == "result":
                 result = event
                 continue
+            session = event.get("session_id") or session
             for kind, text in steps.feed(event):
                 if kind != UPLOAD:
                     report(kind, text)
@@ -459,21 +503,25 @@ def run_claude(prompt: str, claude: str, report: Report, send_file: SendFile | N
     log.info("claude exited %s after %s", proc.returncode, minutes(elapsed))
 
     if timed_out.is_set():
-        return (
+        return Outcome(
             f"Gave up after {minutes(TURN_TIMEOUT_S)} and stopped Claude Code. The turn "
-            "may be half played; someone should look at the game before the next run."
+            "may be half played; someone should look at the game before the next run.",
+            session,
         )
+    if resume and session is None:
+        # Claude Code answers an unknown session id with an error result and no other event.
+        raise SessionLost(resume)
     if not result:
         tail = ("".join(stderr).strip() or "(no output)")[-1500:]
-        return f"Claude Code exited with code {proc.returncode} and no result:\n```{tail}```"
+        return Outcome(f"Claude Code exited with code {proc.returncode} and no result:\n```{tail}```", session)
 
     reply = (result.get("result") or "").strip() or "(Claude finished without a reply.)"
     if result.get("is_error"):
         reply = f"Claude Code stopped with an error ({result.get('subtype')}):\n{reply}"
-    session = result.get("session_id", "?")
+    session = result.get("session_id") or session
     if len(reply) > SLACK_MAX_CHARS:
         reply = reply[:SLACK_MAX_CHARS].rstrip() + "\n… (cut short; the full reply is in the session)"
-    return f"{reply}\n\n_{minutes(elapsed)} · session `{session}`_"
+    return Outcome(f"{reply}\n\n_{minutes(elapsed)} · session `{session or '?'}`_", session)
 
 
 def open_dm(client, player: Player | None) -> str | None:
@@ -504,20 +552,31 @@ def log_step(kind: str, text: str) -> None:
         log.info("  %s %s", STEP_MARKERS[kind], " ".join(text.split()))
 
 
-def run_with_progress(client, channel: str, thread_ts: str | None, prompt: str, claude: str) -> None:
-    """Run Claude with a live progress message in a conversation, then post its reply there."""
+def run_with_progress(
+    client, channel: str, thread_ts: str | None, prompt: str, claude: str, resume: str | None = None
+) -> str | None:
+    """Run Claude with a live progress message in a conversation, then post its reply there.
+
+    `resume` is the session to carry on with; SessionLost when it is gone,
+    which the progress message then says. Returns the session the run was in.
+    """
     status = client.chat_postMessage(channel=channel, thread_ts=thread_ts, text="On it.")
     progress = Progress(client, status["channel"], status["ts"])
     state = "Failed"
     try:
-        result = run_claude(
+        outcome = run_claude(
             prompt, claude, progress.add,
             send_file=lambda path, caption: upload_screenshot(client, status["channel"], thread_ts, path, caption),
+            resume=resume,
         )
         state = "Finished"
+    except SessionLost:
+        state = "Our earlier conversation is gone, starting a new one"
+        raise
     finally:
         progress.finish(state)
-    client.chat_postMessage(channel=channel, thread_ts=thread_ts, text=result)
+    client.chat_postMessage(channel=channel, thread_ts=thread_ts, text=outcome.reply)
+    return outcome.session
 
 
 def play_absent_turn(client, claude: str, dm: str | None, name: str, prompt: str, intro: str, blocks: list | None = None) -> None:
@@ -530,4 +589,4 @@ def play_absent_turn(client, claude: str, dm: str | None, name: str, prompt: str
         client.chat_postMessage(channel=dm, text=intro, **({"blocks": blocks} if blocks else {}))
         run_with_progress(client, dm, None, prompt, claude)
     else:
-        log.info("reply for %s (not on Slack):\n%s", name, run_claude(prompt, claude, log_step))
+        log.info("reply for %s (not on Slack):\n%s", name, run_claude(prompt, claude, log_step).reply)

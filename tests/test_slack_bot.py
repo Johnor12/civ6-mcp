@@ -113,18 +113,20 @@ class Bot:
         self.client = FakeClient()
         self.replies: list[tuple[str, dict]] = []
         self.runs: list[tuple[str | None, str]] = []  # (conversation, prompt) of each Claude run
+        self.resumed: list[str | None] = []  # the session each run was to resume
+        self.sessions: list[str | None] = []  # the session of each run to come; "S1", "S2"... once used up
+        self.lost: set[str] = set()  # sessions Claude Code no longer has
         self.turns: list[tuple[TurnRecord, float]] = []
         self.asked = 0  # whose_turn calls
         self.n = 0
         monkeypatch.setattr(slack_bot, "whose_turn", self._whose_turn)
+        monkeypatch.setattr(claude_runs, "run_with_progress", self._run)
         monkeypatch.setattr(
             claude_runs,
-            "run_with_progress",
-            lambda client, channel, thread_ts, prompt, claude: self.runs.append((channel, prompt)),
+            "run_claude",
+            lambda prompt, claude, report: self.runs.append((None, prompt)) or claude_runs.Outcome("", None),
         )
-        monkeypatch.setattr(
-            claude_runs, "run_claude", lambda prompt, claude, report: self.runs.append((None, prompt)) or ""
-        )
+        monkeypatch.setattr(claude_runs, "TURN_SESSION_PATH", tmp_path / "turn_session.json")
         monkeypatch.setattr(turn_announcer, "announce", lambda client: None)
         monkeypatch.setattr(out_of_office, "STATE_PATH", tmp_path / "out_of_office.json")
         monkeypatch.setattr(turn_logger, "TURN_LOG_PATH", tmp_path / "turn_log.jsonl")  # and the taken log beside it
@@ -134,6 +136,17 @@ class Bot:
     def on(self, *turns: tuple[TurnRecord, float]) -> None:
         """What whose_turn answers, in order; the last answer repeats."""
         self.turns = list(turns)
+
+    def _run(self, client, channel, thread_ts, prompt, claude, resume=None):
+        """claude_runs.run_with_progress: a resumed run stays in its session, a new one gets the next."""
+        self.resumed.append(resume)
+        if resume in self.lost:
+            raise claude_runs.SessionLost(resume)
+        self.runs.append((channel, prompt))
+        if resume:
+            return resume
+        new = sum(r is None for r in self.resumed)
+        return self.sessions.pop(0) if self.sessions else f"S{new}"
 
     def _whose_turn(self):
         self.asked += 1
@@ -255,6 +268,68 @@ def test_admin_on_their_own_turn_is_an_own_turn(bot):
     bot.dm(JOHN, "finish the hunter's house")
     assert bot.runs and "finish the hunter's house" in bot.runs[0][1]
     assert not bot.replies  # nothing is posted before the run
+
+
+def test_later_messages_on_the_same_turn_resume_the_first_ones_session(bot):
+    bot.on((turn("John", leader="LEADER_LIME_THULE_DAVE"), HALF_HOUR))
+    bot.dm(JOHN, "where should my second city go?")
+    bot.dm(JOHN, "ok, the river spot. what about {braces}?")
+    bot.dm(JOHN, "play it that way")
+    assert bot.resumed == [None, "S1", "S1"]
+    first, second, third = (prompt for conversation, prompt in bot.runs)
+    assert "This run was started from Slack by John" in first and "where should my second city go?" in first
+    assert "continues this conversation" in first
+    assert "Another Slack message from John" in second and "what about {braces}?" in second
+    assert "This run was started from Slack" not in second  # the session already has it
+    assert "play it that way" in third
+
+
+def test_the_next_turn_starts_a_new_session(bot):
+    bot.on((turn("John", 10, "LEADER_LIME_THULE_DAVE"), HALF_HOUR))
+    bot.dm(JOHN, "what is my plan?")
+    bot.on((turn("John", 11, "LEADER_LIME_THULE_DAVE"), HALF_HOUR))
+    bot.dm(JOHN, "play my turn")
+    bot.dm(JOHN, "what did you do?")
+    assert bot.resumed == [None, None, "S2"]
+    assert "This run was started from Slack by John" in bot.runs[1][1]
+
+
+def test_another_players_turn_does_not_get_the_session(bot):
+    bot.on((turn("John", leader="LEADER_LIME_THULE_DAVE"), HALF_HOUR))
+    bot.dm(JOHN, "what is my plan?")
+    bot.on((turn("Aidan"), HALF_HOUR))
+    bot.dm(AIDAN, "play my turn")
+    assert bot.resumed == [None, None]
+    assert "This run was started from Slack by Aidan" in bot.runs[1][1]
+
+
+def test_a_session_that_is_gone_is_replaced_by_a_new_one(bot):
+    bot.on((turn("John", leader="LEADER_LIME_THULE_DAVE"), HALF_HOUR))
+    bot.dm(JOHN, "what is my plan?")
+    bot.lost.add("S1")
+    bot.dm(JOHN, "play it")
+    bot.dm(JOHN, "thanks")
+    assert bot.resumed == [None, "S1", None, "S2"]
+    assert "This run was started from Slack by John" in bot.runs[1][1] and "play it" in bot.runs[1][1]
+    assert "Another Slack message from John" in bot.runs[2][1]
+
+
+def test_a_run_that_began_no_session_is_followed_by_a_new_one(bot):
+    bot.on((turn("John", leader="LEADER_LIME_THULE_DAVE"), HALF_HOUR))
+    bot.sessions = [None, "S-second"]
+    bot.dm(JOHN, "what is my plan?")  # Claude Code did not start
+    bot.dm(JOHN, "what is my plan?")
+    bot.dm(JOHN, "play it")
+    assert bot.resumed == [None, None, "S-second"]
+
+
+def test_a_played_turn_does_not_use_the_players_session(bot):
+    rec = turn("Aidan")
+    bot.on((rec, HALF_HOUR))
+    bot.dm(AIDAN, "what is my plan?")
+    bot.click(JOHN, key(rec))  # the admin has it played from the fixed prompt
+    assert bot.resumed == [None, None]
+    assert "what is my plan?" not in bot.runs[1][1]
 
 
 def test_rival_click_before_the_limit_is_refused(bot):

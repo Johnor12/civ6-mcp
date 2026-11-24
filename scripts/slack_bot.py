@@ -18,7 +18,10 @@ decides who may do what; what a message means is left to Claude.
 
 - From the player whose turn it is, by DM: the message goes as-is to
   `claude -p` in the repo root, which plays the turn with it as the note or
-  just answers it, whichever the player asked for. In a channel they are
+  just answers it, whichever the player asked for. Their later messages
+  during the same turn resume that Claude Code session, so a conversation
+  about the turn keeps its context and Claude does not read the game from
+  scratch each time; the next turn starts a new one. In a channel they are
   asked to DM instead, because the other players can read the channel.
 - From any other player, by DM or channel mention: the reply says whose turn
   it is and how long it has lasted. Once that is TURN_LIMIT_S of workday
@@ -98,7 +101,8 @@ OWN_TURN_PROMPT = """\
 This run was started from Slack by {name}, who plays {leader} in the hotseat \
 game. {status} After {limit} of workday time ({workday}) any other player can \
 have it played for them. Nobody is at the terminal and nobody can answer \
-questions before the run ends.
+questions before the run ends, but every later message {name} sends during \
+this turn continues this conversation.
 
 Do what {name}'s message below asks. It may ask you to play their turn, or it \
 may only be a question. To play the turn, follow the stand-in workflow in \
@@ -120,6 +124,27 @@ other player's diary, and load a save only to open this turn if the game is \
 at the main menu. If something stops you (another player's turn-change \
 screen, the game not running, a popup dismiss_popup cannot close), stop and \
 say what someone at the PC has to do.
+
+Your final message is sent to {name} in Slack as-is. {slack_format}
+
+Message from {name}:
+{text}
+"""
+
+# A later message on the same turn. It goes to the session the turn's first
+# message started (claude_runs.turn_session), which still has OWN_TURN_PROMPT
+# and everything said and read since.
+FOLLOW_UP_PROMPT = """\
+Another Slack message from {name} about this same turn. {status} What the \
+first message of this conversation said still holds: act for {leader} only, \
+end the turn only if {name} asks for it to be played, and nobody can answer \
+questions before this run ends.
+
+Answer from what you already know where that is enough. The game has not \
+stood still, though: {name} may have played at the PC since your last reply, \
+so before giving orders query again what they depend on (get_turn_briefing \
+for all of it), and if a game tool is refused, hotseat_status says why. \
+Screenshots from earlier messages are deleted; take a new one to send one.
 
 Your final message is sent to {name} in Slack as-is. {slack_format}
 
@@ -549,12 +574,21 @@ def register(app: App, claude: str, lock: RunLock) -> None:
             lock.release()
 
     def own_turn(sender: Player, rec, worked: float, text: str, is_dm: bool, reply, client, channel: str, thread_ts):
-        """The player whose turn it is: their DM goes to Claude as-is, to play the turn or answer."""
+        """The player whose turn it is: their DM goes to Claude as-is, to play the turn or answer.
+
+        All their messages during one turn go to one Claude Code session:
+        the first starts it, the later ones resume it, so Claude keeps what
+        was discussed and what it read from the game.
+        """
         if not is_dm:
             reply(f"{turn_status(rec, worked, 'your')} DM me about it: the other players can read this channel.")
             return
-        log.info("own turn for %s, %s turn %d: %r", sender.name, rec.leader, rec.turn, text)
-        prompt = OWN_TURN_PROMPT.format(
+        session = claude_runs.turn_session(rec.key)
+        log.info(
+            "own turn for %s, %s turn %d, %s: %r",
+            sender.name, rec.leader, rec.turn, f"session {session}" if session else "new session", text,
+        )
+        fields = dict(
             name=sender.name,
             leader=rec.leader_display,
             status=turn_status(rec, worked, f"{sender.name}'s"),
@@ -563,7 +597,17 @@ def register(app: App, claude: str, lock: RunLock) -> None:
             text=text,
             slack_format=SLACK_FORMAT,
         )
-        claude_runs.run_with_progress(client, channel, thread_ts, prompt, claude)
+
+        def run(prompt: str, resume: str | None = None) -> str | None:
+            return claude_runs.run_with_progress(client, channel, thread_ts, prompt.format(**fields), claude, resume=resume)
+
+        try:
+            session = run(FOLLOW_UP_PROMPT, resume=session) if session else run(OWN_TURN_PROMPT)
+        except claude_runs.SessionLost:
+            log.warning("session %s is gone; a new one for %s's turn %d", session, sender.name, rec.turn)
+            session = run(OWN_TURN_PROMPT)
+        if session:
+            claude_runs.remember_turn_session(rec.key, session)
         turn_announcer.announce(client)
 
     def other_turn(sender: Player, owner: Player | None, rec, worked: float, reply) -> None:

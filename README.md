@@ -117,7 +117,11 @@ only decides who may do what; what a message means is up to Claude.
   the repo root, with whose turn it is and how long it has lasted. Claude
   plays the turn with your message as the note (`finish the campus, no
   wars`) or just answers it ("how long do I have?"), whichever you asked
-  for. Mentioning the bot in a channel on your own turn only gets "DM me",
+  for. Everything you DM during one turn is one conversation: the first
+  message starts a Claude Code session and the later ones resume it
+  (`claude -p --resume`), so Claude remembers what you discussed and what
+  it already read from the game. Your next turn starts a new one.
+  Mentioning the bot in a channel on your own turn only gets "DM me",
   since the other players read the channel.
 - **Someone else's turn: DM or mention the bot.** You get whose turn it is
   and how long it has lasted. Once that is 1 hour of workday time

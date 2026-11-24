@@ -64,3 +64,5 @@
 {"at": "2026-11-24T09:42:38-05:00", "turn": 55, "leader": "LEADER_GITARJA", "player": "Heldi", "event": "resumed", "by": "player"}
 {"at": "2026-11-24T10:25:46-05:00", "turn": 55, "leader": "LEADER_AMANITORE", "player": "Hunter", "event": "returned", "by": "player"}
 {"at": "2026-11-24T10:25:48-05:00", "turn": 55, "leader": "LEADER_AMANITORE", "player": "Hunter", "event": "resumed", "by": "player"}
+{"at": "2026-11-24T13:57:00-05:00", "turn": 56, "leader": "LEADER_AMANITORE", "player": "Hunter", "event": "returned", "by": "claude"}
+{"at": "2026-11-24T13:57:01-05:00", "turn": 56, "leader": "LEADER_AMANITORE", "player": "Hunter", "event": "resumed", "by": "claude"}
